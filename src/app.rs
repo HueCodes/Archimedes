@@ -4,6 +4,7 @@ use crate::demos::convex_hull::ConvexHullDemo;
 use crate::demos::critical_area::CriticalAreaDemo;
 use crate::demos::delaunay_voronoi::DelaunayVoronoiDemo;
 use crate::demos::polygon_ops::{EditMode, PolygonOpsDemo, Preset};
+use crate::demos::robustness::RobustnessDemo;
 use crate::theme;
 use i_overlay::core::overlay_rule::OverlayRule;
 
@@ -28,20 +29,13 @@ impl Tab {
     }
 
     fn status(&self) -> TabStatus {
-        match self {
-            Tab::ConvexHull
-            | Tab::DelaunayVoronoi
-            | Tab::PolygonOps
-            | Tab::CriticalArea => TabStatus::Live,
-            _ => TabStatus::Planned,
-        }
+        TabStatus::Live
     }
 }
 
 #[derive(Clone, Copy)]
 enum TabStatus {
     Live,
-    Planned,
 }
 
 pub struct App {
@@ -50,6 +44,7 @@ pub struct App {
     voronoi: DelaunayVoronoiDemo,
     polygon_ops: PolygonOpsDemo,
     critical_area: CriticalAreaDemo,
+    robustness: RobustnessDemo,
 }
 
 impl App {
@@ -62,6 +57,7 @@ impl App {
             voronoi: DelaunayVoronoiDemo::default(),
             polygon_ops: PolygonOpsDemo::default(),
             critical_area: CriticalAreaDemo::default(),
+            robustness: RobustnessDemo::default(),
         }
     }
 
@@ -88,7 +84,7 @@ impl App {
                     Tab::DelaunayVoronoi => self.voronoi.clear(),
                     Tab::PolygonOps => self.polygon_ops.clear(),
                     Tab::CriticalArea => self.critical_area.reset(),
-                    _ => {}
+                    Tab::Robustness => self.robustness.reset(),
                 }
             }
             if i.key_pressed(egui::Key::R) {
@@ -115,6 +111,7 @@ impl eframe::App for App {
             &self.voronoi,
             &self.polygon_ops,
             &self.critical_area,
+            &self.robustness,
             self.tab,
         );
         left_panel(
@@ -124,6 +121,7 @@ impl eframe::App for App {
             &mut self.voronoi,
             &mut self.polygon_ops,
             &mut self.critical_area,
+            &mut self.robustness,
         );
         right_panel(
             ctx,
@@ -132,6 +130,7 @@ impl eframe::App for App {
             &mut self.voronoi,
             &mut self.polygon_ops,
             &mut self.critical_area,
+            &mut self.robustness,
         );
 
         egui::CentralPanel::default()
@@ -145,7 +144,7 @@ impl eframe::App for App {
                 Tab::DelaunayVoronoi => self.voronoi.ui(ui),
                 Tab::PolygonOps => self.polygon_ops.ui(ui),
                 Tab::CriticalArea => self.critical_area.ui(ui),
-                Tab::Robustness => placeholder(ui, "Robustness demo", "planned · Sunday afternoon"),
+                Tab::Robustness => self.robustness.ui(ui),
             });
     }
 }
@@ -189,6 +188,7 @@ fn bottom_bar(
     voronoi: &DelaunayVoronoiDemo,
     polygons: &PolygonOpsDemo,
     critical: &CriticalAreaDemo,
+    robustness: &RobustnessDemo,
     tab: Tab,
 ) {
     egui::TopBottomPanel::bottom("status")
@@ -235,7 +235,19 @@ fn bottom_bar(
                             0,
                         )
                     }
-                    _ => (String::from("—"), 0),
+                    Tab::Robustness => {
+                        let r = robustness.readout();
+                        let flag = if r.agree { "agree" } else { "DISAGREE" };
+                        (
+                            format!(
+                                "naive {:+.4e} · robust {:+.4e} · signs {flag} · total disagreements {}",
+                                r.naive,
+                                r.robust,
+                                robustness.disagreements()
+                            ),
+                            0,
+                        )
+                    }
                 };
                 let text = if seed != 0 {
                     format!("{left} · seed 0x{:08X}", seed as u32)
@@ -271,6 +283,7 @@ fn left_panel(
     voronoi: &mut DelaunayVoronoiDemo,
     polygons: &mut PolygonOpsDemo,
     critical: &mut CriticalAreaDemo,
+    robustness: &mut RobustnessDemo,
 ) {
     egui::SidePanel::left("tree")
         .exact_width(236.0)
@@ -302,7 +315,7 @@ fn left_panel(
                         Tab::DelaunayVoronoi => voronoi.clear(),
                         Tab::PolygonOps => polygons.clear(),
                         Tab::CriticalArea => critical.reset(),
-                        _ => {}
+                        Tab::Robustness => robustness.reset(),
                     }
                 }
                 if ui.button("Random 100").clicked() {
@@ -333,7 +346,6 @@ fn tree_item(ui: &mut egui::Ui, current: &mut Tab, t: Tab) {
     let selected = *current == t;
     let (glyph, glyph_color) = match t.status() {
         TabStatus::Live => ("*", theme::OK),
-        TabStatus::Planned => ("·", theme::FG_DIM),
     };
     let title_color = if selected { theme::FG } else { theme::FG_DIM };
     let bg = if selected {
@@ -383,6 +395,7 @@ fn right_panel(
     voronoi: &mut DelaunayVoronoiDemo,
     polygons: &mut PolygonOpsDemo,
     critical: &mut CriticalAreaDemo,
+    robustness: &mut RobustnessDemo,
 ) {
     egui::SidePanel::right("properties")
         .exact_width(308.0)
@@ -399,12 +412,7 @@ fn right_panel(
                 Tab::DelaunayVoronoi => voronoi_sidebar(ui, voronoi),
                 Tab::PolygonOps => polygon_ops_sidebar(ui, polygons),
                 Tab::CriticalArea => critical_area_sidebar(ui, critical),
-                Tab::Robustness => planned_sidebar(
-                    ui,
-                    "Shewchuk adaptive orient2d",
-                    "~5x avg over naive",
-                    "Floating-point orientation tests flip sign near collinearity. Adaptive predicates fall back to exact arithmetic only when the error interval crosses zero.",
-                ),
+                Tab::Robustness => robustness_sidebar(ui, robustness),
             }
         });
 }
@@ -703,11 +711,11 @@ fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
     ui.label(RichText::new("Papadopoulou & Lee (1999)").size(12.0).color(theme::FG_DIM));
 }
 
-fn planned_sidebar(ui: &mut egui::Ui, name: &str, complexity: &str, invariant: &str) {
+fn robustness_sidebar(ui: &mut egui::Ui, demo: &mut RobustnessDemo) {
     section_header(ui, "ALGORITHM");
-    ui.label(RichText::new(name).size(15.0).color(theme::FG));
+    ui.label(RichText::new("orient2d · naive f32 vs Shewchuk adaptive").size(15.0).color(theme::FG));
     ui.label(
-        RichText::new(complexity)
+        RichText::new("robust: ~5x avg, exact sign")
             .monospace()
             .size(12.0)
             .color(theme::ACCENT),
@@ -716,18 +724,70 @@ fn planned_sidebar(ui: &mut egui::Ui, name: &str, complexity: &str, invariant: &
     ui.add_space(14.0);
     section_header(ui, "INVARIANT");
     ui.label(
-        RichText::new(invariant)
-            .size(12.5)
-            .color(theme::FG.linear_multiply(0.85)),
+        RichText::new(
+            "Near-collinear inputs make (b-a) × (c-a) subtract two almost-equal terms. Under f32 the sign is dominated by rounding — downstream hull turns, Delaunay flips, and boolean ops branch on this sign and silently produce inconsistent output. Shewchuk's adaptive predicates fall back to extended precision only when the error interval crosses zero.",
+        )
+        .size(12.5)
+        .color(theme::FG.linear_multiply(0.85)),
     );
 
     ui.add_space(14.0);
-    section_header(ui, "STATUS");
+    section_header(ui, "READOUT");
+    let r = demo.readout();
+    metric_line(ui, "naive (f32)", &format!("{:+.4e}", r.naive));
+    metric_line(ui, "robust (f64)", &format!("{:+.4e}", r.robust));
+    let sign_label = |s: i8| match s {
+        1 => "LEFT",
+        -1 => "RIGHT",
+        _ => "ZERO",
+    };
+    metric_line(ui, "naive sign", sign_label(r.sign_naive));
+    metric_line(ui, "robust sign", sign_label(r.sign_robust));
+    let (label, color) = if r.agree {
+        ("AGREE", theme::OK)
+    } else {
+        ("DISAGREE", theme::WARN)
+    };
     ui.label(
-        RichText::new("planned — stub in place")
+        RichText::new(label)
             .monospace()
+            .size(13.0)
+            .color(color),
+    );
+    metric_line(
+        ui,
+        "disagreements",
+        &format!("{}", demo.disagreements()),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "VIEW");
+    ui.checkbox(demo.show_diff_field_mut(), "Shade disagreement field");
+    if ui.button("Reload degenerate preset").clicked() {
+        demo.preset_nearly_collinear();
+    }
+
+    ui.add_space(14.0);
+    section_header(ui, "WHY IT MATTERS");
+    ui.label(
+        RichText::new(
+            "Mask layout and alignment math branch on orientation tests at every edge. A silent sign flip in a CAD tool produces a subtly broken polygon no-one notices until the wafer is ruined.",
+        )
+        .size(12.0)
+        .color(theme::FG_DIM),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "REFERENCES");
+    ui.label(
+        RichText::new("Shewchuk (1997) Adaptive Precision FP Predicates")
             .size(12.0)
-            .color(theme::ORANGE),
+            .color(theme::FG_DIM),
+    );
+    ui.label(
+        RichText::new("Yap · Exact Geometric Computation paradigm")
+            .size(12.0)
+            .color(theme::FG_DIM),
     );
 }
 
@@ -792,14 +852,6 @@ fn shortcut_line(ui: &mut egui::Ui, key: &str, action: &str) {
                 .color(theme::FG_DIM),
         );
     });
-}
-
-fn placeholder(ui: &mut egui::Ui, title: &str, sub: &str) {
-    let available = ui.available_size();
-    let (_, painter) = ui.allocate_painter(available, egui::Sense::hover());
-    let rect = painter.clip_rect();
-    crate::canvas::paint_grid(&painter, rect);
-    crate::canvas::paint_empty_state(&painter, rect, title, sub);
 }
 
 struct Color32Ext;
