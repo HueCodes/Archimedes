@@ -198,18 +198,16 @@ impl PolygonOpsDemo {
         paint_polygon(&painter, &self.a, fill_a(), stroke_a());
         paint_polygon(&painter, &self.b, fill_b(), stroke_b());
         if let Some(c) = &self.cache {
+            let outer_fill = theme::OK.linear_multiply(0.9);
+            let outer_stroke = Stroke::new(2.0, Color32::from_rgb(0x6f, 0x94, 0x4c));
+            let hole_fill = theme::BG;
+            let hole_stroke = Stroke::new(1.25, outer_stroke.color);
             for shape in &c.result {
                 for (i, contour) in shape.iter().enumerate() {
                     let (fill, stroke) = if i == 0 {
-                        (
-                            theme::OK.linear_multiply(0.45),
-                            Stroke::new(2.0, theme::OK),
-                        )
+                        (outer_fill, outer_stroke)
                     } else {
-                        (
-                            theme::BG.linear_multiply(0.9),
-                            Stroke::new(1.25, theme::OK.linear_multiply(0.55)),
-                        )
+                        (hole_fill, hole_stroke)
                     };
                     paint_polygon(&painter, contour, fill, stroke);
                 }
