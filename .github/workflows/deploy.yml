@@ -24,7 +24,7 @@ jobs:
         run: cargo install --locked trunk
 
       - name: Build
-        run: trunk build --release --public-url /archimedes/
+        run: trunk build --release --public-url /Archimedes/
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

@@ -1,6 +1,6 @@
 [build]
 target = "index.html"
-public_url = "/archimedes/"
+public_url = "/Archimedes/"
 
 [serve]
 address = "127.0.0.1"

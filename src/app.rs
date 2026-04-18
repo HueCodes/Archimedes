@@ -160,7 +160,7 @@ fn top_bar(ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(
-                    RichText::new("archimedes")
+                    RichText::new("Archimedes")
                         .size(17.0)
                         .color(theme::FG),
                 );

@@ -1,12 +1,12 @@
-# archimedes
+# Archimedes
 
 An interactive computational-geometry playground — convex hulls, Delaunay / Voronoi,
 polygon boolean operations — written in Rust, compiled to WebAssembly, rendered via
 WebGPU through [`egui`](https://github.com/emilk/egui).
 
-**Live demo**: https://huecodes.github.io/archimedes/ *(deployed after first push)*
+**Live demo**: https://huecodes.github.io/Archimedes/ *(deployed after first push)*
 
-## Why "archimedes"
+## Why "Archimedes"
 
 Archimedes approximated π by exhausting inscribed and circumscribed polygons —
 the same orientation-test machinery that drives the convex-hull tab in the limit.
