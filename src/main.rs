@@ -5,6 +5,7 @@ mod canvas;
 mod demos;
 mod geometry;
 mod theme;
+mod ui;
 
 use app::App;
 
