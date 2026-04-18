@@ -1,10 +1,25 @@
 # Archimedes
 
-An interactive computational-geometry playground — convex hulls, Delaunay / Voronoi,
-polygon boolean operations — written in Rust, compiled to WebAssembly, rendered via
-WebGPU through [`egui`](https://github.com/emilk/egui).
+An interactive computational-geometry playground — convex hulls, Delaunay /
+Voronoi, polygon boolean operations, semiconductor critical-area, and a naive-vs-
+robust predicate showdown — written in Rust, compiled to WebAssembly, rendered
+via WebGPU through [`egui`](https://github.com/emilk/egui).
 
-**Live demo**: https://huecodes.github.io/Archimedes/ *(deployed after first push)*
+**Live demo**: https://huecodes.github.io/Archimedes/
+
+[![Convex hull tab](docs/screenshots/hull.png)](https://huecodes.github.io/Archimedes/)
+
+## What's in it
+
+| Tab | One-liner |
+|---|---|
+| **Convex Hull** | Andrew's monotone chain, animated step-through, live orientation-test counter |
+| **Delaunay + Voronoi** | Incremental Bowyer-Watson via `spade`; hover a site for its degree, cell area, and nearest neighbor; Euler `V − E + F = 2` readout |
+| **Polygon Ops** | Union / intersection / difference / xor / symmetric difference on two draggable polygons via `i_overlay` |
+| **Critical Area** | Two "wires" and a defect-radius slider; shades the region where a disk of radius `r` shorts them — the canonical semiconductor yield-analysis primitive |
+| **Robustness** | Side-by-side Delaunay under naive `f32` orientation vs. Shewchuk adaptive predicates on a near-degenerate point set |
+
+Screenshots: [Delaunay / Voronoi](docs/screenshots/delaunay-voronoi.png) · [Polygon Ops](docs/screenshots/polygon-ops.png) · [Critical Area](docs/screenshots/critical-area.png) · [Robustness](docs/screenshots/robustness.png)
 
 ## Why "Archimedes"
 
@@ -13,11 +28,12 @@ the same orientation-test machinery that drives the convex-hull tab in the limit
 
 ## Stack
 
-- [`eframe`](https://crates.io/crates/eframe) + [`egui`](https://crates.io/crates/egui) — UI, with `wgpu` rendering backend
+- [`eframe`](https://crates.io/crates/eframe) 0.30 + [`egui`](https://crates.io/crates/egui) — UI, with `wgpu` rendering backend
 - [`trunk`](https://trunkrs.dev/) — wasm build + dev server
 - [`spade`](https://crates.io/crates/spade) — Delaunay / Voronoi (incremental Bowyer-Watson)
 - [`i_overlay`](https://crates.io/crates/i_overlay) — polygon boolean operations
 - [`robust`](https://crates.io/crates/robust) — Shewchuk adaptive-precision predicates
+- [`web-time`](https://crates.io/crates/web-time) — monotonic clocks that compile on both native and `wasm32`
 
 ## Build
 
@@ -25,24 +41,27 @@ the same orientation-test machinery that drives the convex-hull tab in the limit
 cargo install trunk
 rustup target add wasm32-unknown-unknown
 
-# dev (auto-reload)
-trunk serve
+# dev server, no auto-reload
+trunk serve --port 8080 --no-autoreload
+# → http://127.0.0.1:8080/Archimedes/
 
 # release build for deploy
-trunk build --release
+trunk build --release --public-url /Archimedes/
 
-# native desktop build
+# native desktop build (same source)
 cargo run --release
 ```
 
 ## Algorithms implemented from scratch
 
-- Andrew's monotone chain for convex hull (`src/demos/convex_hull.rs`)
-- 2D orientation predicate, naive and robust variants (`src/geometry/primitives.rs`)
+- Andrew's monotone chain convex hull (`src/demos/convex_hull.rs`)
+- 2D orientation predicate, naive `f32` and Shewchuk-robust variants (`src/geometry/primitives.rs`)
+- Minkowski-style critical-area dilation via offset + intersection (`src/demos/critical_area.rs`)
 
 ## References
 
 - Shewchuk, *Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates*, 1997
+- Papadopoulou & Lee, *Critical Area Computation via Voronoi Diagrams*, 1999
 - de Berg, van Kreveld, Overmars, Schwarzkopf, *Computational Geometry: Algorithms and Applications*, 3rd ed.
 - Fortune, *A Sweepline Algorithm for Voronoi Diagrams*, 1987
 - Greiner & Hormann, *Efficient Clipping of Arbitrary Polygons*, 1998
