@@ -2,7 +2,9 @@ use eframe::egui::{self, Align, Layout, RichText, Vec2};
 
 use crate::demos::convex_hull::ConvexHullDemo;
 use crate::demos::delaunay_voronoi::DelaunayVoronoiDemo;
+use crate::demos::polygon_ops::{EditMode, PolygonOpsDemo, Preset};
 use crate::theme;
+use i_overlay::core::overlay_rule::OverlayRule;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Tab {
@@ -24,7 +26,7 @@ impl Tab {
 
     fn status(&self) -> TabStatus {
         match self {
-            Tab::ConvexHull | Tab::DelaunayVoronoi => TabStatus::Live,
+            Tab::ConvexHull | Tab::DelaunayVoronoi | Tab::PolygonOps => TabStatus::Live,
             _ => TabStatus::Planned,
         }
     }
@@ -40,6 +42,7 @@ pub struct App {
     tab: Tab,
     convex_hull: ConvexHullDemo,
     voronoi: DelaunayVoronoiDemo,
+    polygon_ops: PolygonOpsDemo,
 }
 
 impl App {
@@ -50,6 +53,7 @@ impl App {
             tab: Tab::ConvexHull,
             convex_hull: ConvexHullDemo::default(),
             voronoi: DelaunayVoronoiDemo::default(),
+            polygon_ops: PolygonOpsDemo::default(),
         }
     }
 
@@ -71,6 +75,7 @@ impl App {
                 match self.tab {
                     Tab::ConvexHull => self.convex_hull.clear(),
                     Tab::DelaunayVoronoi => self.voronoi.clear(),
+                    Tab::PolygonOps => self.polygon_ops.clear(),
                     _ => {}
                 }
             }
@@ -92,9 +97,21 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_shortcuts(ctx);
         top_bar(ctx);
-        bottom_bar(ctx, &self.convex_hull, &self.voronoi, self.tab);
-        left_panel(ctx, &mut self.tab, &mut self.convex_hull, &mut self.voronoi);
-        right_panel(ctx, self.tab, &mut self.convex_hull, &mut self.voronoi);
+        bottom_bar(ctx, &self.convex_hull, &self.voronoi, &self.polygon_ops, self.tab);
+        left_panel(
+            ctx,
+            &mut self.tab,
+            &mut self.convex_hull,
+            &mut self.voronoi,
+            &mut self.polygon_ops,
+        );
+        right_panel(
+            ctx,
+            self.tab,
+            &mut self.convex_hull,
+            &mut self.voronoi,
+            &mut self.polygon_ops,
+        );
 
         egui::CentralPanel::default()
             .frame(
@@ -105,7 +122,7 @@ impl eframe::App for App {
             .show(ctx, |ui| match self.tab {
                 Tab::ConvexHull => self.convex_hull.ui(ui),
                 Tab::DelaunayVoronoi => self.voronoi.ui(ui),
-                Tab::PolygonOps => placeholder(ui, "Polygon boolean ops", "planned · Sunday morning"),
+                Tab::PolygonOps => self.polygon_ops.ui(ui),
                 Tab::Robustness => placeholder(ui, "Robustness demo", "planned · Sunday afternoon"),
             });
     }
@@ -148,6 +165,7 @@ fn bottom_bar(
     ctx: &egui::Context,
     hull: &ConvexHullDemo,
     voronoi: &DelaunayVoronoiDemo,
+    polygons: &PolygonOpsDemo,
     tab: Tab,
 ) {
     egui::TopBottomPanel::bottom("status")
@@ -174,6 +192,15 @@ fn bottom_bar(
                         (
                             format!("{n} sites · {tri} triangles · build {ms:.2} ms"),
                             voronoi.seed(),
+                        )
+                    }
+                    Tab::PolygonOps => {
+                        let (na, nb, vcount, area, ms) = polygons.metrics();
+                        (
+                            format!(
+                                "A {na} · B {nb} · result {vcount} verts · area {area:.0} · {ms:.2} ms"
+                            ),
+                            0,
                         )
                     }
                     _ => (String::from("—"), 0),
@@ -210,6 +237,7 @@ fn left_panel(
     tab: &mut Tab,
     hull: &mut ConvexHullDemo,
     voronoi: &mut DelaunayVoronoiDemo,
+    polygons: &mut PolygonOpsDemo,
 ) {
     egui::SidePanel::left("tree")
         .exact_width(236.0)
@@ -238,6 +266,7 @@ fn left_panel(
                     match *tab {
                         Tab::ConvexHull => hull.clear(),
                         Tab::DelaunayVoronoi => voronoi.clear(),
+                        Tab::PolygonOps => polygons.clear(),
                         _ => {}
                     }
                 }
@@ -317,6 +346,7 @@ fn right_panel(
     tab: Tab,
     hull: &mut ConvexHullDemo,
     voronoi: &mut DelaunayVoronoiDemo,
+    polygons: &mut PolygonOpsDemo,
 ) {
     egui::SidePanel::right("properties")
         .exact_width(308.0)
@@ -331,12 +361,7 @@ fn right_panel(
             match tab {
                 Tab::ConvexHull => hull_sidebar(ui, hull),
                 Tab::DelaunayVoronoi => voronoi_sidebar(ui, voronoi),
-                Tab::PolygonOps => planned_sidebar(
-                    ui,
-                    "Vatti overlay (i_overlay)",
-                    "O((n+k) log n)",
-                    "Robust polygon union / intersection / difference / xor, handling shared edges and degeneracies.",
-                ),
+                Tab::PolygonOps => polygon_ops_sidebar(ui, polygons),
                 Tab::Robustness => planned_sidebar(
                     ui,
                     "Shewchuk adaptive orient2d",
@@ -484,6 +509,112 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
     section_header(ui, "REFERENCES");
     ui.label(RichText::new("Bowyer (1981) · Watson (1981)").size(12.0).color(theme::FG_DIM));
     ui.label(RichText::new("de Berg et al., §7 / §9").size(12.0).color(theme::FG_DIM));
+}
+
+fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
+    section_header(ui, "ALGORITHM");
+    ui.label(RichText::new("Overlay (i_overlay)").size(15.0).color(theme::FG));
+    ui.label(
+        RichText::new("O((n+k) log n)")
+            .monospace()
+            .size(12.0)
+            .color(theme::ACCENT),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "INVARIANT");
+    ui.label(
+        RichText::new(
+            "Robust union / intersection / difference / xor on simple polygons, handling shared edges, coincident vertices, and degenerate touchings.",
+        )
+        .size(12.5)
+        .color(theme::FG.linear_multiply(0.85)),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "OPERATION");
+    let op = *demo.op_mut();
+    for (rule, label) in [
+        (OverlayRule::Union, "A ∪ B"),
+        (OverlayRule::Intersect, "A ∩ B"),
+        (OverlayRule::Difference, "A \\ B"),
+        (OverlayRule::InverseDifference, "B \\ A"),
+        (OverlayRule::Xor, "A ⊕ B"),
+    ] {
+        let selected = op == rule;
+        if ui
+            .selectable_label(selected, RichText::new(label).monospace().size(12.5))
+            .clicked()
+        {
+            *demo.op_mut() = rule;
+        }
+    }
+
+    ui.add_space(14.0);
+    section_header(ui, "EDIT MODE");
+    for (mode, label) in [
+        (EditMode::DragOnly, "Drag only"),
+        (EditMode::EditA, "Edit A (click to add)"),
+        (EditMode::EditB, "Edit B (click to add)"),
+    ] {
+        let selected = *demo.mode_mut() == mode;
+        if ui.selectable_label(selected, label).clicked() {
+            *demo.mode_mut() = mode;
+        }
+    }
+
+    ui.add_space(14.0);
+    section_header(ui, "PRESETS");
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("A:")
+                .monospace()
+                .size(11.0)
+                .color(theme::FG_DIM),
+        );
+        for (label, p) in [
+            ("pentagon", Preset::Pentagon),
+            ("star", Preset::Star),
+            ("L", Preset::LShape),
+            ("rect", Preset::Rectangle),
+        ] {
+            if ui.small_button(label).clicked() {
+                demo.preset_a(p);
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("B:")
+                .monospace()
+                .size(11.0)
+                .color(theme::FG_DIM),
+        );
+        for (label, p) in [
+            ("pentagon", Preset::Pentagon),
+            ("star", Preset::Star),
+            ("L", Preset::LShape),
+            ("rect", Preset::Rectangle),
+        ] {
+            if ui.small_button(label).clicked() {
+                demo.preset_b(p);
+            }
+        }
+    });
+
+    ui.add_space(14.0);
+    section_header(ui, "LIVE");
+    let (na, nb, vcount, area, ms) = demo.metrics();
+    metric_line(ui, "A vertices", &format!("{na}"));
+    metric_line(ui, "B vertices", &format!("{nb}"));
+    metric_line(ui, "result", &format!("{vcount} verts"));
+    metric_line(ui, "area", &format!("{area:.0}"));
+    metric_line(ui, "build", &format!("{ms:.2} ms"));
+
+    ui.add_space(14.0);
+    section_header(ui, "REFERENCES");
+    ui.label(RichText::new("Vatti (1992) · Greiner-Hormann (1998)").size(12.0).color(theme::FG_DIM));
+    ui.label(RichText::new("i_overlay crate").size(12.0).color(theme::FG_DIM));
 }
 
 fn planned_sidebar(ui: &mut egui::Ui, name: &str, complexity: &str, invariant: &str) {
