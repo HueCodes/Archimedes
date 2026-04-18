@@ -20,6 +20,15 @@ pub struct DelaunayVoronoiDemo {
     triangles: usize,
     last_ms: f32,
     euler: Euler,
+    focus: Option<Focus>,
+}
+
+#[derive(Clone, Copy)]
+pub struct Focus {
+    pub degree: usize,
+    pub cell_area: f32,
+    pub nearest_dist: f32,
+    pub is_hull: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -53,6 +62,7 @@ impl Default for DelaunayVoronoiDemo {
             triangles: 0,
             last_ms: 0.0,
             euler: Euler::default(),
+            focus: None,
         }
     }
 }
@@ -64,6 +74,10 @@ impl DelaunayVoronoiDemo {
 
     pub fn euler(&self) -> Euler {
         self.euler
+    }
+
+    pub fn focus(&self) -> Option<Focus> {
+        self.focus
     }
 
     pub fn seed(&self) -> u64 {
@@ -161,6 +175,8 @@ impl DelaunayVoronoiDemo {
             paint_delaunay_edges(&frame.painter, t);
         }
 
+        self.focus = hover_vertex.map(|v| compute_focus(t, v, viewport));
+
         if let Some(v) = hover_vertex {
             highlight_cell(&frame.painter, t, v, viewport);
             if self.show_circumcircle {
@@ -171,6 +187,55 @@ impl DelaunayVoronoiDemo {
         self.editor
             .paint(&frame.painter, theme::FG, frame.response.hover_pos());
     }
+}
+
+fn compute_focus(
+    t: &DelaunayTriangulation<Point2<f32>>,
+    fv: spade::handles::FixedVertexHandle,
+    viewport: Rect,
+) -> Focus {
+    let vertex = t.vertex(fv);
+    let degree = vertex.out_edges().count();
+    let is_hull = vertex
+        .out_edges()
+        .any(|e| e.face().as_inner().is_none());
+
+    let far_scale = (viewport.width() + viewport.height()) * 4.0;
+    let polygon = voronoi_cell_polygon(vertex, far_scale);
+    let clip = rect_to_poly(viewport);
+    let clipped = sutherland_hodgman(&polygon, &clip);
+    let cell_area = polygon_abs_area(&clipped);
+
+    let pos = vertex.position();
+    let mut nearest = f32::INFINITY;
+    for e in vertex.out_edges() {
+        let np = e.to().position();
+        let dx = np.x - pos.x;
+        let dy = np.y - pos.y;
+        let d = (dx * dx + dy * dy).sqrt();
+        if d < nearest {
+            nearest = d;
+        }
+    }
+    Focus {
+        degree,
+        cell_area,
+        nearest_dist: if nearest.is_finite() { nearest } else { 0.0 },
+        is_hull,
+    }
+}
+
+fn polygon_abs_area(poly: &[Pos2]) -> f32 {
+    if poly.len() < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for i in 0..poly.len() {
+        let a = poly[i];
+        let b = poly[(i + 1) % poly.len()];
+        sum += a.x * b.y - b.x * a.y;
+    }
+    (sum * 0.5).abs()
 }
 
 fn nearest_vertex(

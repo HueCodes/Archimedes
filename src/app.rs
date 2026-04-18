@@ -308,8 +308,17 @@ fn left_panel(
 
             ui.add_space(18.0);
             section_header(ui, "ACTIONS");
+            let clear_label = match *tab {
+                Tab::ConvexHull | Tab::DelaunayVoronoi => "Clear",
+                Tab::PolygonOps | Tab::CriticalArea | Tab::Robustness => "Reset",
+            };
+            let random_label = match *tab {
+                Tab::ConvexHull => Some("Random 100"),
+                Tab::DelaunayVoronoi => Some("Random 100"),
+                _ => None,
+            };
             ui.horizontal(|ui| {
-                if ui.button("Clear").clicked() {
+                if ui.button(clear_label).clicked() {
                     match *tab {
                         Tab::ConvexHull => hull.clear(),
                         Tab::DelaunayVoronoi => voronoi.clear(),
@@ -318,11 +327,13 @@ fn left_panel(
                         Tab::Robustness => robustness.reset(),
                     }
                 }
-                if ui.button("Random 100").clicked() {
-                    match *tab {
-                        Tab::ConvexHull => hull.random_into_last_rect(100),
-                        Tab::DelaunayVoronoi => voronoi.random_into_last_rect(100),
-                        _ => {}
+                if let Some(label) = random_label {
+                    if ui.button(label).clicked() {
+                        match *tab {
+                            Tab::ConvexHull => hull.random_into_last_rect(100),
+                            Tab::DelaunayVoronoi => voronoi.random_into_last_rect(100),
+                            _ => {}
+                        }
                     }
                 }
             });
@@ -549,6 +560,28 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
     ui.checkbox(demo.show_voronoi_mut(), "Voronoi cells");
     ui.checkbox(demo.show_delaunay_mut(), "Delaunay edges");
     ui.checkbox(demo.show_circumcircle_mut(), "Circumcircles on hover");
+
+    ui.add_space(14.0);
+    section_header(ui, "FOCUS");
+    if let Some(focus) = demo.focus() {
+        metric_line(ui, "degree", &format!("{}", focus.degree));
+        metric_line(ui, "cell area", &format!("{:.0} px²", focus.cell_area));
+        metric_line(ui, "nearest nbr", &format!("{:.1} px", focus.nearest_dist));
+        if focus.is_hull {
+            ui.label(
+                RichText::new("hull site · unbounded cell")
+                    .monospace()
+                    .size(11.0)
+                    .color(theme::ORANGE),
+            );
+        }
+    } else {
+        ui.label(
+            RichText::new("hover a site to inspect")
+                .size(11.5)
+                .color(theme::FG_DIM),
+        );
+    }
 
     ui.add_space(14.0);
     section_header(ui, "REFERENCES");
