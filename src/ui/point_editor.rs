@@ -11,6 +11,7 @@ pub const HIT_RADIUS: f32 = 8.0;
 pub struct PointEditor {
     points: Vec<Pos2>,
     drag_idx: Option<usize>,
+    version: u64,
 }
 
 /// Per-frame handles produced by `run`. Painter/response are moved out so the
@@ -37,11 +38,19 @@ impl PointEditor {
     pub fn clear(&mut self) {
         self.points.clear();
         self.drag_idx = None;
+        self.version = self.version.wrapping_add(1);
     }
 
     pub fn set(&mut self, pts: Vec<Pos2>) {
         self.points = pts;
         self.drag_idx = None;
+        self.version = self.version.wrapping_add(1);
+    }
+
+    /// Bumps on every mutation (add / drag / delete / clear / set). Callers use this
+    /// to invalidate cached work that depends on the point set.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// Allocate a canvas-filling painter, then consume pointer input for this frame:
@@ -59,6 +68,7 @@ impl PointEditor {
                 if let Some(idx) = self.nearest_within(pos, HIT_RADIUS) {
                     self.points.remove(idx);
                     self.drag_idx = None;
+                    self.version = self.version.wrapping_add(1);
                 }
             }
         }
@@ -72,6 +82,7 @@ impl PointEditor {
             if let (Some(idx), Some(pos)) = (self.drag_idx, hover) {
                 if idx < self.points.len() {
                     self.points[idx] = pos;
+                    self.version = self.version.wrapping_add(1);
                 }
             }
         }
@@ -83,6 +94,7 @@ impl PointEditor {
             if let Some(pos) = hover {
                 if self.nearest_within(pos, HIT_RADIUS).is_none() {
                     self.points.push(pos);
+                    self.version = self.version.wrapping_add(1);
                 }
             }
         }
@@ -157,9 +169,20 @@ mod tests {
     #[test]
     fn reject_click_within_hit_radius() {
         let mut e = PointEditor::default();
-        e.push(Pos2::new(100.0, 100.0));
+        e.set(vec![Pos2::new(100.0, 100.0)]);
         assert!(e.nearest_within(Pos2::new(104.0, 103.0), HIT_RADIUS).is_some());
         assert!(e.nearest_within(Pos2::new(200.0, 200.0), HIT_RADIUS).is_none());
+    }
+
+    #[test]
+    fn version_advances_on_mutation() {
+        let mut e = PointEditor::default();
+        let v0 = e.version();
+        e.set(vec![Pos2::new(1.0, 2.0)]);
+        assert_ne!(e.version(), v0);
+        let v1 = e.version();
+        e.clear();
+        assert_ne!(e.version(), v1);
     }
 
     #[test]

@@ -70,6 +70,9 @@ impl App {
             if i.key_pressed(egui::Key::R) {
                 self.convex_hull.random_into_last_rect(100);
             }
+            if i.key_pressed(egui::Key::Space) && self.tab == Tab::ConvexHull {
+                self.convex_hull.toggle_play();
+            }
         });
     }
 }
@@ -80,7 +83,7 @@ impl eframe::App for App {
         top_bar(ctx);
         bottom_bar(ctx, &self.convex_hull, self.tab);
         left_panel(ctx, &mut self.tab, &mut self.convex_hull);
-        right_panel(ctx, self.tab, &self.convex_hull);
+        right_panel(ctx, self.tab, &mut self.convex_hull);
 
         egui::CentralPanel::default()
             .frame(
@@ -145,11 +148,12 @@ fn bottom_bar(ctx: &egui::Context, hull: &ConvexHullDemo, tab: Tab) {
                     _ => (0, 0, 0, 0.0),
                 };
                 let left = format!(
-                    "{n} points · {h} on hull · {t} orient tests · {ms:.2} ms",
+                    "{n} points · {h} on hull · {t} orient tests · {ms:.2} ms · seed 0x{s:08X}",
                     n = n,
                     h = hull_n,
                     t = tests,
                     ms = ms,
+                    s = hull.seed() as u32,
                 );
                 ui.label(
                     RichText::new(left)
@@ -158,11 +162,15 @@ fn bottom_bar(ctx: &egui::Context, hull: &ConvexHullDemo, tab: Tab) {
                         .color(theme::FG_DIM),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let (txt, color) = match (tab, hull.anim_progress()) {
+                        (Tab::ConvexHull, Some((_, _, true))) => ("animating", theme::ACCENT),
+                        _ => ("ready", theme::OK),
+                    };
                     ui.label(
-                        RichText::new("ready")
+                        RichText::new(txt)
                             .monospace()
                             .size(11.0)
-                            .color(theme::OK),
+                            .color(color),
                     );
                 });
             });
@@ -263,7 +271,7 @@ fn tree_item(ui: &mut egui::Ui, current: &mut Tab, t: Tab) {
     }
 }
 
-fn right_panel(ctx: &egui::Context, tab: Tab, hull: &ConvexHullDemo) {
+fn right_panel(ctx: &egui::Context, tab: Tab, hull: &mut ConvexHullDemo) {
     egui::SidePanel::right("properties")
         .exact_width(308.0)
         .resizable(false)
@@ -298,7 +306,7 @@ fn right_panel(ctx: &egui::Context, tab: Tab, hull: &ConvexHullDemo) {
         });
 }
 
-fn hull_sidebar(ui: &mut egui::Ui, hull: &ConvexHullDemo) {
+fn hull_sidebar(ui: &mut egui::Ui, hull: &mut ConvexHullDemo) {
     section_header(ui, "ALGORITHM");
     ui.label(RichText::new("Andrew's monotone chain").size(15.0).color(theme::FG));
     ui.label(
@@ -324,7 +332,44 @@ fn hull_sidebar(ui: &mut egui::Ui, hull: &ConvexHullDemo) {
     metric_line(ui, "points", &format!("{n}"));
     metric_line(ui, "on hull", &format!("{hull_n}"));
     metric_line(ui, "orient tests", &format!("{tests}"));
+    let nlogn = if n >= 2 {
+        (n as f32) * (n as f32).log2()
+    } else {
+        0.0
+    };
+    metric_line(ui, "n log n", &format!("{nlogn:>6.0}"));
     metric_line(ui, "last frame", &format!("{ms:.2} ms"));
+
+    ui.add_space(14.0);
+    section_header(ui, "ANIMATION");
+    let progress = hull.anim_progress();
+    let (step, total, playing) = progress.unwrap_or((0, 0, false));
+    let enabled = n >= 3;
+    ui.horizontal(|ui| {
+        let play_label = if playing { "Pause" } else { "Play" };
+        if ui
+            .add_enabled(enabled, egui::Button::new(play_label))
+            .clicked()
+        {
+            hull.toggle_play();
+        }
+        if ui
+            .add_enabled(enabled && total > 0, egui::Button::new("Reset"))
+            .clicked()
+        {
+            hull.reset_anim();
+        }
+    });
+    metric_line(
+        ui,
+        "step",
+        &if total > 0 {
+            format!("{step} / {total}")
+        } else {
+            "—".to_string()
+        },
+    );
+    metric_line(ui, "interval", "120 ms");
 
     ui.add_space(14.0);
     section_header(ui, "REFERENCES");
