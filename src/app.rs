@@ -1,6 +1,7 @@
 use eframe::egui::{self, Align, Layout, RichText, Vec2};
 
 use crate::demos::convex_hull::ConvexHullDemo;
+use crate::demos::critical_area::CriticalAreaDemo;
 use crate::demos::delaunay_voronoi::DelaunayVoronoiDemo;
 use crate::demos::polygon_ops::{EditMode, PolygonOpsDemo, Preset};
 use crate::theme;
@@ -11,6 +12,7 @@ enum Tab {
     ConvexHull,
     DelaunayVoronoi,
     PolygonOps,
+    CriticalArea,
     Robustness,
 }
 
@@ -20,13 +22,17 @@ impl Tab {
             Tab::ConvexHull => "Convex Hull",
             Tab::DelaunayVoronoi => "Delaunay / Voronoi",
             Tab::PolygonOps => "Polygon Ops",
+            Tab::CriticalArea => "Critical Area",
             Tab::Robustness => "Robustness",
         }
     }
 
     fn status(&self) -> TabStatus {
         match self {
-            Tab::ConvexHull | Tab::DelaunayVoronoi | Tab::PolygonOps => TabStatus::Live,
+            Tab::ConvexHull
+            | Tab::DelaunayVoronoi
+            | Tab::PolygonOps
+            | Tab::CriticalArea => TabStatus::Live,
             _ => TabStatus::Planned,
         }
     }
@@ -43,6 +49,7 @@ pub struct App {
     convex_hull: ConvexHullDemo,
     voronoi: DelaunayVoronoiDemo,
     polygon_ops: PolygonOpsDemo,
+    critical_area: CriticalAreaDemo,
 }
 
 impl App {
@@ -54,6 +61,7 @@ impl App {
             convex_hull: ConvexHullDemo::default(),
             voronoi: DelaunayVoronoiDemo::default(),
             polygon_ops: PolygonOpsDemo::default(),
+            critical_area: CriticalAreaDemo::default(),
         }
     }
 
@@ -69,6 +77,9 @@ impl App {
                 self.tab = Tab::PolygonOps;
             }
             if i.key_pressed(egui::Key::Num4) {
+                self.tab = Tab::CriticalArea;
+            }
+            if i.key_pressed(egui::Key::Num5) {
                 self.tab = Tab::Robustness;
             }
             if i.key_pressed(egui::Key::C) {
@@ -76,6 +87,7 @@ impl App {
                     Tab::ConvexHull => self.convex_hull.clear(),
                     Tab::DelaunayVoronoi => self.voronoi.clear(),
                     Tab::PolygonOps => self.polygon_ops.clear(),
+                    Tab::CriticalArea => self.critical_area.reset(),
                     _ => {}
                 }
             }
@@ -97,13 +109,21 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_shortcuts(ctx);
         top_bar(ctx);
-        bottom_bar(ctx, &self.convex_hull, &self.voronoi, &self.polygon_ops, self.tab);
+        bottom_bar(
+            ctx,
+            &self.convex_hull,
+            &self.voronoi,
+            &self.polygon_ops,
+            &self.critical_area,
+            self.tab,
+        );
         left_panel(
             ctx,
             &mut self.tab,
             &mut self.convex_hull,
             &mut self.voronoi,
             &mut self.polygon_ops,
+            &mut self.critical_area,
         );
         right_panel(
             ctx,
@@ -111,6 +131,7 @@ impl eframe::App for App {
             &mut self.convex_hull,
             &mut self.voronoi,
             &mut self.polygon_ops,
+            &mut self.critical_area,
         );
 
         egui::CentralPanel::default()
@@ -123,6 +144,7 @@ impl eframe::App for App {
                 Tab::ConvexHull => self.convex_hull.ui(ui),
                 Tab::DelaunayVoronoi => self.voronoi.ui(ui),
                 Tab::PolygonOps => self.polygon_ops.ui(ui),
+                Tab::CriticalArea => self.critical_area.ui(ui),
                 Tab::Robustness => placeholder(ui, "Robustness demo", "planned · Sunday afternoon"),
             });
     }
@@ -166,6 +188,7 @@ fn bottom_bar(
     hull: &ConvexHullDemo,
     voronoi: &DelaunayVoronoiDemo,
     polygons: &PolygonOpsDemo,
+    critical: &CriticalAreaDemo,
     tab: Tab,
 ) {
     egui::TopBottomPanel::bottom("status")
@@ -199,6 +222,15 @@ fn bottom_bar(
                         (
                             format!(
                                 "A {na} · B {nb} · result {vcount} verts · area {area:.0} · {ms:.2} ms"
+                            ),
+                            0,
+                        )
+                    }
+                    Tab::CriticalArea => {
+                        let (r, area, ms) = critical.metrics();
+                        (
+                            format!(
+                                "defect radius r = {r:.1} px · critical area {area:.0} · {ms:.2} ms"
                             ),
                             0,
                         )
@@ -238,6 +270,7 @@ fn left_panel(
     hull: &mut ConvexHullDemo,
     voronoi: &mut DelaunayVoronoiDemo,
     polygons: &mut PolygonOpsDemo,
+    critical: &mut CriticalAreaDemo,
 ) {
     egui::SidePanel::left("tree")
         .exact_width(236.0)
@@ -254,6 +287,7 @@ fn left_panel(
                 Tab::ConvexHull,
                 Tab::DelaunayVoronoi,
                 Tab::PolygonOps,
+                Tab::CriticalArea,
                 Tab::Robustness,
             ] {
                 tree_item(ui, tab, t);
@@ -267,6 +301,7 @@ fn left_panel(
                         Tab::ConvexHull => hull.clear(),
                         Tab::DelaunayVoronoi => voronoi.clear(),
                         Tab::PolygonOps => polygons.clear(),
+                        Tab::CriticalArea => critical.reset(),
                         _ => {}
                     }
                 }
@@ -289,7 +324,7 @@ fn left_panel(
             section_header(ui, "SHORTCUTS");
             shortcut_line(ui, "C", "clear");
             shortcut_line(ui, "R", "random");
-            shortcut_line(ui, "1-4", "switch demo");
+            shortcut_line(ui, "1-5", "switch demo");
             shortcut_line(ui, "Space", "play · pause");
         });
 }
@@ -347,6 +382,7 @@ fn right_panel(
     hull: &mut ConvexHullDemo,
     voronoi: &mut DelaunayVoronoiDemo,
     polygons: &mut PolygonOpsDemo,
+    critical: &mut CriticalAreaDemo,
 ) {
     egui::SidePanel::right("properties")
         .exact_width(308.0)
@@ -362,6 +398,7 @@ fn right_panel(
                 Tab::ConvexHull => hull_sidebar(ui, hull),
                 Tab::DelaunayVoronoi => voronoi_sidebar(ui, voronoi),
                 Tab::PolygonOps => polygon_ops_sidebar(ui, polygons),
+                Tab::CriticalArea => critical_area_sidebar(ui, critical),
                 Tab::Robustness => planned_sidebar(
                     ui,
                     "Shewchuk adaptive orient2d",
@@ -615,6 +652,55 @@ fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
     section_header(ui, "REFERENCES");
     ui.label(RichText::new("Vatti (1992) · Greiner-Hormann (1998)").size(12.0).color(theme::FG_DIM));
     ui.label(RichText::new("i_overlay crate").size(12.0).color(theme::FG_DIM));
+}
+
+fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
+    section_header(ui, "ALGORITHM");
+    ui.label(RichText::new("Critical-area via Minkowski dilation").size(15.0).color(theme::FG));
+    ui.label(
+        RichText::new("dilate(A, r/2) ∩ dilate(B, r/2)")
+            .monospace()
+            .size(12.0)
+            .color(theme::ACCENT),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "INVARIANT");
+    ui.label(
+        RichText::new(
+            "A disk of radius r centered at point p bridges features A and B iff p lies in dilate(A, r/2) ∩ dilate(B, r/2).",
+        )
+        .size(12.5)
+        .color(theme::FG.linear_multiply(0.85)),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "DEFECT RADIUS");
+    let r = *demo.radius_mut();
+    ui.add(egui::Slider::new(demo.radius_mut(), 0.0..=80.0).text("r (px)"));
+    let _ = r;
+
+    ui.add_space(14.0);
+    section_header(ui, "LIVE");
+    let (r, area, ms) = demo.metrics();
+    metric_line(ui, "r", &format!("{r:.1} px"));
+    metric_line(ui, "critical area", &format!("{area:.0} px²"));
+    metric_line(ui, "build", &format!("{ms:.2} ms"));
+
+    ui.add_space(14.0);
+    section_header(ui, "WHY IT MATTERS");
+    ui.label(
+        RichText::new(
+            "Yield modeling on a semiconductor mask: the critical area is the integral over defect radii of the region where a defect would short neighboring features. Minimum spacing shrinks \u{2192} critical area explodes.",
+        )
+        .size(12.0)
+        .color(theme::FG_DIM),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "REFERENCES");
+    ui.label(RichText::new("Stapper (1983) · VLSI yield").size(12.0).color(theme::FG_DIM));
+    ui.label(RichText::new("Papadopoulou & Lee (1999)").size(12.0).color(theme::FG_DIM));
 }
 
 fn planned_sidebar(ui: &mut egui::Ui, name: &str, complexity: &str, invariant: &str) {

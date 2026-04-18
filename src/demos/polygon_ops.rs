@@ -376,7 +376,7 @@ fn polygon_regular(center: Pos2, radius: f32, n: usize, start_angle: f32) -> Vec
         .collect()
 }
 
-fn signed_area(poly: &[Pos2]) -> f32 {
+pub(crate) fn signed_area(poly: &[Pos2]) -> f32 {
     if poly.len() < 3 {
         return 0.0;
     }
@@ -402,7 +402,7 @@ fn stroke_b() -> Stroke {
     Stroke::new(1.5, theme::ORANGE.linear_multiply(0.85))
 }
 
-fn paint_polygon(painter: &egui::Painter, poly: &[Pos2], fill: Color32, stroke: Stroke) {
+pub(crate) fn paint_polygon(painter: &egui::Painter, poly: &[Pos2], fill: Color32, stroke: Stroke) {
     if poly.len() < 3 {
         return;
     }
@@ -453,7 +453,7 @@ fn paint_vertex_handles(
     }
 }
 
-fn point_in_polygon(p: Pos2, poly: &[Pos2]) -> bool {
+pub(crate) fn point_in_polygon(p: Pos2, poly: &[Pos2]) -> bool {
     if poly.len() < 3 {
         return false;
     }
@@ -472,7 +472,7 @@ fn point_in_polygon(p: Pos2, poly: &[Pos2]) -> bool {
     inside
 }
 
-fn triangulate(poly: &[Pos2]) -> Vec<[usize; 3]> {
+pub(crate) fn triangulate(poly: &[Pos2]) -> Vec<[usize; 3]> {
     let n = poly.len();
     if n < 3 {
         return Vec::new();
