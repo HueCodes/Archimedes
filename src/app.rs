@@ -1,6 +1,7 @@
 use eframe::egui::{self, Align, Layout, RichText, Vec2};
 
 use crate::demos::convex_hull::ConvexHullDemo;
+use crate::demos::delaunay_voronoi::DelaunayVoronoiDemo;
 use crate::theme;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -23,7 +24,7 @@ impl Tab {
 
     fn status(&self) -> TabStatus {
         match self {
-            Tab::ConvexHull => TabStatus::Live,
+            Tab::ConvexHull | Tab::DelaunayVoronoi => TabStatus::Live,
             _ => TabStatus::Planned,
         }
     }
@@ -38,6 +39,7 @@ enum TabStatus {
 pub struct App {
     tab: Tab,
     convex_hull: ConvexHullDemo,
+    voronoi: DelaunayVoronoiDemo,
 }
 
 impl App {
@@ -47,6 +49,7 @@ impl App {
         Self {
             tab: Tab::ConvexHull,
             convex_hull: ConvexHullDemo::default(),
+            voronoi: DelaunayVoronoiDemo::default(),
         }
     }
 
@@ -65,10 +68,18 @@ impl App {
                 self.tab = Tab::Robustness;
             }
             if i.key_pressed(egui::Key::C) {
-                self.convex_hull.clear();
+                match self.tab {
+                    Tab::ConvexHull => self.convex_hull.clear(),
+                    Tab::DelaunayVoronoi => self.voronoi.clear(),
+                    _ => {}
+                }
             }
             if i.key_pressed(egui::Key::R) {
-                self.convex_hull.random_into_last_rect(100);
+                match self.tab {
+                    Tab::ConvexHull => self.convex_hull.random_into_last_rect(100),
+                    Tab::DelaunayVoronoi => self.voronoi.random_into_last_rect(100),
+                    _ => {}
+                }
             }
             if i.key_pressed(egui::Key::Space) && self.tab == Tab::ConvexHull {
                 self.convex_hull.toggle_play();
@@ -81,9 +92,9 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_shortcuts(ctx);
         top_bar(ctx);
-        bottom_bar(ctx, &self.convex_hull, self.tab);
-        left_panel(ctx, &mut self.tab, &mut self.convex_hull);
-        right_panel(ctx, self.tab, &mut self.convex_hull);
+        bottom_bar(ctx, &self.convex_hull, &self.voronoi, self.tab);
+        left_panel(ctx, &mut self.tab, &mut self.convex_hull, &mut self.voronoi);
+        right_panel(ctx, self.tab, &mut self.convex_hull, &mut self.voronoi);
 
         egui::CentralPanel::default()
             .frame(
@@ -93,7 +104,7 @@ impl eframe::App for App {
             )
             .show(ctx, |ui| match self.tab {
                 Tab::ConvexHull => self.convex_hull.ui(ui),
-                Tab::DelaunayVoronoi => placeholder(ui, "Delaunay + Voronoi", "planned · Saturday evening"),
+                Tab::DelaunayVoronoi => self.voronoi.ui(ui),
                 Tab::PolygonOps => placeholder(ui, "Polygon boolean ops", "planned · Sunday morning"),
                 Tab::Robustness => placeholder(ui, "Robustness demo", "planned · Sunday afternoon"),
             });
@@ -133,7 +144,12 @@ fn top_bar(ctx: &egui::Context) {
         });
 }
 
-fn bottom_bar(ctx: &egui::Context, hull: &ConvexHullDemo, tab: Tab) {
+fn bottom_bar(
+    ctx: &egui::Context,
+    hull: &ConvexHullDemo,
+    voronoi: &DelaunayVoronoiDemo,
+    tab: Tab,
+) {
     egui::TopBottomPanel::bottom("status")
         .exact_height(26.0)
         .frame(
@@ -143,20 +159,32 @@ fn bottom_bar(ctx: &egui::Context, hull: &ConvexHullDemo, tab: Tab) {
         )
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
-                let (n, hull_n, tests, ms) = match tab {
-                    Tab::ConvexHull => hull.metrics(),
-                    _ => (0, 0, 0, 0.0),
+                let (left, seed) = match tab {
+                    Tab::ConvexHull => {
+                        let (n, hull_n, tests, ms) = hull.metrics();
+                        (
+                            format!(
+                                "{n} points · {hull_n} on hull · {tests} orient tests · {ms:.2} ms"
+                            ),
+                            hull.seed(),
+                        )
+                    }
+                    Tab::DelaunayVoronoi => {
+                        let (n, tri, ms) = voronoi.metrics();
+                        (
+                            format!("{n} sites · {tri} triangles · build {ms:.2} ms"),
+                            voronoi.seed(),
+                        )
+                    }
+                    _ => (String::from("—"), 0),
                 };
-                let left = format!(
-                    "{n} points · {h} on hull · {t} orient tests · {ms:.2} ms · seed 0x{s:08X}",
-                    n = n,
-                    h = hull_n,
-                    t = tests,
-                    ms = ms,
-                    s = hull.seed() as u32,
-                );
+                let text = if seed != 0 {
+                    format!("{left} · seed 0x{:08X}", seed as u32)
+                } else {
+                    left
+                };
                 ui.label(
-                    RichText::new(left)
+                    RichText::new(text)
                         .monospace()
                         .size(11.0)
                         .color(theme::FG_DIM),
@@ -177,7 +205,12 @@ fn bottom_bar(ctx: &egui::Context, hull: &ConvexHullDemo, tab: Tab) {
         });
 }
 
-fn left_panel(ctx: &egui::Context, tab: &mut Tab, hull: &mut ConvexHullDemo) {
+fn left_panel(
+    ctx: &egui::Context,
+    tab: &mut Tab,
+    hull: &mut ConvexHullDemo,
+    voronoi: &mut DelaunayVoronoiDemo,
+) {
     egui::SidePanel::left("tree")
         .exact_width(236.0)
         .resizable(false)
@@ -202,10 +235,18 @@ fn left_panel(ctx: &egui::Context, tab: &mut Tab, hull: &mut ConvexHullDemo) {
             section_header(ui, "ACTIONS");
             ui.horizontal(|ui| {
                 if ui.button("Clear").clicked() {
-                    hull.clear();
+                    match *tab {
+                        Tab::ConvexHull => hull.clear(),
+                        Tab::DelaunayVoronoi => voronoi.clear(),
+                        _ => {}
+                    }
                 }
                 if ui.button("Random 100").clicked() {
-                    hull.random_into_last_rect(100);
+                    match *tab {
+                        Tab::ConvexHull => hull.random_into_last_rect(100),
+                        Tab::DelaunayVoronoi => voronoi.random_into_last_rect(100),
+                        _ => {}
+                    }
                 }
             });
 
@@ -271,7 +312,12 @@ fn tree_item(ui: &mut egui::Ui, current: &mut Tab, t: Tab) {
     }
 }
 
-fn right_panel(ctx: &egui::Context, tab: Tab, hull: &mut ConvexHullDemo) {
+fn right_panel(
+    ctx: &egui::Context,
+    tab: Tab,
+    hull: &mut ConvexHullDemo,
+    voronoi: &mut DelaunayVoronoiDemo,
+) {
     egui::SidePanel::right("properties")
         .exact_width(308.0)
         .resizable(false)
@@ -284,12 +330,7 @@ fn right_panel(ctx: &egui::Context, tab: Tab, hull: &mut ConvexHullDemo) {
             ui.spacing_mut().item_spacing = Vec2::new(10.0, 6.0);
             match tab {
                 Tab::ConvexHull => hull_sidebar(ui, hull),
-                Tab::DelaunayVoronoi => planned_sidebar(
-                    ui,
-                    "Bowyer-Watson (spade)",
-                    "O(n log n) expected",
-                    "Delaunay triangulation maximizes the minimum angle; its dual is the Voronoi diagram.",
-                ),
+                Tab::DelaunayVoronoi => voronoi_sidebar(ui, voronoi),
                 Tab::PolygonOps => planned_sidebar(
                     ui,
                     "Vatti overlay (i_overlay)",
@@ -383,6 +424,66 @@ fn hull_sidebar(ui: &mut egui::Ui, hull: &mut ConvexHullDemo) {
             .size(12.0)
             .color(theme::FG_DIM),
     );
+}
+
+fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
+    section_header(ui, "ALGORITHM");
+    ui.label(RichText::new("Bowyer-Watson (spade)").size(15.0).color(theme::FG));
+    ui.label(
+        RichText::new("O(n log n) expected")
+            .monospace()
+            .size(12.0)
+            .color(theme::ACCENT),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "INVARIANT");
+    ui.label(
+        RichText::new(
+            "Voronoi cell of site p is the set of points closest to p. Delaunay is its dual: two sites share a Voronoi edge iff they share a Delaunay edge.",
+        )
+        .size(12.5)
+        .color(theme::FG.linear_multiply(0.85)),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "LIVE");
+    let (n, tri, ms) = demo.metrics();
+    metric_line(ui, "sites", &format!("{n}"));
+    metric_line(ui, "triangles", &format!("{tri}"));
+    metric_line(ui, "build", &format!("{ms:.2} ms"));
+
+    ui.add_space(14.0);
+    section_header(ui, "EULER");
+    let euler = demo.euler();
+    metric_line(ui, "V", &format!("{}", euler.v));
+    metric_line(ui, "E", &format!("{}", euler.e));
+    metric_line(ui, "F", &format!("{}", euler.f));
+    let chi = euler.characteristic();
+    let (label, color) = if euler.v == 0 {
+        ("—", theme::FG_DIM)
+    } else if chi == 2 {
+        ("V − E + F = 2", theme::OK)
+    } else {
+        ("invariant broken", theme::WARN)
+    };
+    ui.label(
+        RichText::new(label)
+            .monospace()
+            .size(11.0)
+            .color(color),
+    );
+
+    ui.add_space(14.0);
+    section_header(ui, "LAYERS");
+    ui.checkbox(demo.show_voronoi_mut(), "Voronoi cells");
+    ui.checkbox(demo.show_delaunay_mut(), "Delaunay edges");
+    ui.checkbox(demo.show_circumcircle_mut(), "Circumcircles on hover");
+
+    ui.add_space(14.0);
+    section_header(ui, "REFERENCES");
+    ui.label(RichText::new("Bowyer (1981) · Watson (1981)").size(12.0).color(theme::FG_DIM));
+    ui.label(RichText::new("de Berg et al., §7 / §9").size(12.0).color(theme::FG_DIM));
 }
 
 fn planned_sidebar(ui: &mut egui::Ui, name: &str, complexity: &str, invariant: &str) {
