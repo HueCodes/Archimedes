@@ -6,13 +6,12 @@ use i_overlay::float::single::SingleFloatOverlay;
 use crate::canvas;
 use crate::theme;
 
-const HIT_RADIUS: f32 = 8.0;
+const HIT_RADIUS: f32 = 10.0;
 
 pub struct PolygonOpsDemo {
     a: Vec<Pos2>,
     b: Vec<Pos2>,
     op: OverlayRule,
-    mode: EditMode,
     drag: Option<DragTarget>,
     last_rect: Option<Rect>,
     cache: Option<Cache>,
@@ -24,13 +23,6 @@ pub struct PolygonOpsDemo {
 enum DragTarget {
     Vertex(Side, usize),
     Body(Side),
-}
-
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub enum EditMode {
-    DragOnly,
-    EditA,
-    EditB,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,7 +71,6 @@ impl Default for PolygonOpsDemo {
             a: pentagon(Pos2::new(360.0, 320.0), 130.0),
             b: rectangle(Pos2::new(500.0, 380.0), 220.0, 160.0),
             op: OverlayRule::Union,
-            mode: EditMode::DragOnly,
             drag: None,
             last_rect: None,
             cache: None,
@@ -90,9 +81,6 @@ impl Default for PolygonOpsDemo {
 }
 
 impl PolygonOpsDemo {
-    pub fn mode_mut(&mut self) -> &mut EditMode {
-        &mut self.mode
-    }
     pub fn op_mut(&mut self) -> &mut OverlayRule {
         &mut self.op
     }
@@ -198,19 +186,17 @@ impl PolygonOpsDemo {
             self.drag = None;
         }
 
+        // Mode-less editing: clicking on empty space does nothing, but clicking
+        // within HIT_RADIUS of an edge inserts a new vertex at the projected
+        // point on that edge. Keeps the sidebar clean (no EditMode toggle) and
+        // is more discoverable than a 3-way mode switch.
         if response.clicked() {
             if let Some(pos) = hover {
                 if self.nearest_vertex(pos).is_none() {
-                    match self.mode {
-                        EditMode::EditA => {
-                            self.a.push(pos);
-                            self.vers_a = self.vers_a.wrapping_add(1);
-                        }
-                        EditMode::EditB => {
-                            self.b.push(pos);
-                            self.vers_b = self.vers_b.wrapping_add(1);
-                        }
-                        EditMode::DragOnly => {}
+                    if let Some((side, edge_idx, proj)) = self.nearest_edge(pos) {
+                        let poly = self.polygon_mut(side);
+                        poly.insert(edge_idx + 1, proj);
+                        self.bump_version(side);
                     }
                 }
             }
@@ -221,6 +207,8 @@ impl PolygonOpsDemo {
         } else if let Some(pos) = hover {
             if self.nearest_vertex(pos).is_some() || self.polygon_under(pos).is_some() {
                 ui.ctx().set_cursor_icon(CursorIcon::Grab);
+            } else if self.nearest_edge(pos).is_some() {
+                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
             }
         }
 
@@ -288,6 +276,26 @@ impl PolygonOpsDemo {
             }
         }
         best.map(|(s, i, _)| (s, i))
+    }
+
+    /// Find the closest polygon edge to `pos` within `HIT_RADIUS`, returning
+    /// which polygon it belongs to, the edge index (edge i goes from vertex
+    /// i to vertex (i+1) % n), and the projected point on that edge. Used
+    /// to insert a new vertex on click.
+    fn nearest_edge(&self, pos: Pos2) -> Option<(Side, usize, Pos2)> {
+        let r = HIT_RADIUS;
+        let mut best: Option<(Side, usize, Pos2, f32)> = None;
+        for (side, poly) in [(Side::A, &self.a), (Side::B, &self.b)] {
+            for i in 0..poly.len() {
+                let a = poly[i];
+                let b = poly[(i + 1) % poly.len()];
+                let (proj, dist) = project_onto_segment(pos, a, b);
+                if dist <= r && best.is_none_or(|(_, _, _, bd)| dist < bd) {
+                    best = Some((side, i, proj, dist));
+                }
+            }
+        }
+        best.map(|(s, i, p, _)| (s, i, p))
     }
 
     fn recompute_if_dirty(&mut self) {
@@ -372,6 +380,19 @@ impl Preset {
             Preset::Rectangle => rectangle(center, scale * 1.6, scale * 1.1),
         }
     }
+}
+
+/// Project `p` onto segment `a -> b`, clamping to endpoints. Returns the
+/// projected point and the distance from `p` to the segment.
+fn project_onto_segment(p: Pos2, a: Pos2, b: Pos2) -> (Pos2, f32) {
+    let ab = b - a;
+    let len_sq = ab.length_sq();
+    if len_sq < 1e-6 {
+        return (a, (p - a).length());
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    let proj = a + ab * t;
+    (proj, (p - proj).length())
 }
 
 fn pentagon(center: Pos2, radius: f32) -> Vec<Pos2> {
@@ -591,6 +612,35 @@ fn point_in_triangle(p: Pos2, a: Pos2, b: Pos2, c: Pos2) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_onto_segment_endpoints_and_interior() {
+        let a = Pos2::new(0.0, 0.0);
+        let b = Pos2::new(10.0, 0.0);
+        let (proj_mid, d_mid) = project_onto_segment(Pos2::new(5.0, 3.0), a, b);
+        assert_eq!(proj_mid, Pos2::new(5.0, 0.0));
+        assert!((d_mid - 3.0).abs() < 1e-4);
+        let (proj_before, _) = project_onto_segment(Pos2::new(-5.0, 5.0), a, b);
+        assert_eq!(proj_before, a);
+        let (proj_after, _) = project_onto_segment(Pos2::new(15.0, 5.0), a, b);
+        assert_eq!(proj_after, b);
+    }
+
+    #[test]
+    fn click_on_edge_inserts_vertex_at_projection() {
+        let mut demo = PolygonOpsDemo::default();
+        demo.a = rectangle(Pos2::new(100.0, 100.0), 100.0, 100.0);
+        let before = demo.a.len();
+        // Click near the top edge (vertices 0 and 1 of the rectangle)
+        let edge_midpoint = Pos2::new(100.0, 50.0); // y=50 is top edge for 100x100 rect centered at (100,100)
+        let hit = demo.nearest_edge(edge_midpoint);
+        assert!(hit.is_some(), "midpoint of top edge should be within HIT_RADIUS");
+        let (side, edge_idx, proj) = hit.unwrap();
+        assert!(matches!(side, Side::A));
+        let poly = demo.polygon_mut(side);
+        poly.insert(edge_idx + 1, proj);
+        assert_eq!(demo.a.len(), before + 1);
+    }
 
     #[test]
     fn triangulate_square() {

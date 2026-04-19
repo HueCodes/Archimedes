@@ -3,7 +3,7 @@ use eframe::egui::{self, Align, Layout, RichText, Vec2};
 use crate::demos::convex_hull::ConvexHullDemo;
 use crate::demos::critical_area::CriticalAreaDemo;
 use crate::demos::delaunay_voronoi::DelaunayVoronoiDemo;
-use crate::demos::polygon_ops::{EditMode, PolygonOpsDemo, Preset};
+use crate::demos::polygon_ops::{PolygonOpsDemo, Preset};
 use crate::demos::robustness::RobustnessDemo;
 use crate::theme;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -208,7 +208,15 @@ fn bottom_bar(
                 .inner_margin(egui::Margin::symmetric(14.0, 4.0)),
         )
         .show(ctx, |ui| {
-            ui.horizontal_centered(|ui| {
+            // Allocate the full inner height so both left and right labels share
+            // the same vertical reference for Align::Center. `horizontal_centered`
+            // alone can give the nested right_to_left sub-ui a shorter row than
+            // the outer, leaving the two labels on slightly different baselines.
+            let row_height = ui.available_height();
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), row_height),
+                Layout::left_to_right(Align::Center),
+                |ui| {
                 let (left, seed) = match tab {
                     Tab::ConvexHull => {
                         let (n, hull_n, tests, ms) = hull.metrics();
@@ -281,7 +289,8 @@ fn bottom_bar(
                             .color(color),
                     );
                 });
-            });
+                },
+            );
         });
 }
 
@@ -635,19 +644,6 @@ fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
             .clicked()
         {
             *demo.op_mut() = rule;
-        }
-    }
-
-    ui.add_space(14.0);
-    section_header(ui, "EDIT MODE");
-    for (mode, label) in [
-        (EditMode::DragOnly, "Drag only"),
-        (EditMode::EditA, "Edit A (click to add)"),
-        (EditMode::EditB, "Edit B (click to add)"),
-    ] {
-        let selected = *demo.mode_mut() == mode;
-        if ui.selectable_label(selected, label).clicked() {
-            *demo.mode_mut() = mode;
         }
     }
 

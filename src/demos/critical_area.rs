@@ -7,7 +7,7 @@ use crate::canvas;
 use crate::demos::polygon_ops::{paint_polygon, point_in_polygon, signed_area};
 use crate::theme;
 
-const HIT_RADIUS: f32 = 8.0;
+const HIT_RADIUS: f32 = 10.0;
 const ARC_SEGMENTS: usize = 16;
 
 pub struct CriticalAreaDemo {

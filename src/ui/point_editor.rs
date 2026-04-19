@@ -3,7 +3,7 @@ use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Sense};
 use crate::canvas;
 use crate::theme;
 
-pub const HIT_RADIUS: f32 = 8.0;
+pub const HIT_RADIUS: f32 = 10.0;
 
 /// Interactive point set: click to add, drag to move, right-click to delete.
 /// Shared substrate for every demo tab.
