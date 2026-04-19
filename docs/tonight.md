@@ -98,6 +98,68 @@ questions," and move on. Do not derail the session.
 
 ---
 
+## Checkpoint C1b — input interaction polish (30-45 min)
+
+Decisions from Hugh's input-handling review. Lands after C1 verification so
+the interaction contract is uniform before narrative work depends on it.
+
+### C1b.1 — unify HIT_RADIUS to 10 px
+
+Currently: `PointEditor` 8, `PolygonOps` 8, `CriticalArea` 8, `Robustness` 10.
+Unify to 10 everywhere. The 2 px bump matters on high-DPI / trackpad input —
+reduces "surgical" feeling without causing accidental overlap on the default
+point layouts (which are separated by ≥ 30 px everywhere).
+
+Files:
+- `src/ui/point_editor.rs::HIT_RADIUS`
+- `src/demos/polygon_ops.rs::HIT_RADIUS`
+- `src/demos/critical_area.rs::HIT_RADIUS`
+- `src/demos/robustness.rs::HIT_RADIUS` (already 10, verify)
+
+### C1b.2 — right-click semantics: delete or no-op, never repurpose
+
+Audit of current state:
+- `PointEditor` (Hull, DV): right-click deletes nearest ✓
+- `PolygonOps`: right-click deletes vertex (if poly has > 3 verts) ✓
+- `CriticalArea`: no right-click handler — default no-op ✓
+- `Robustness`: no right-click handler — default no-op ✓
+
+All four match the rule already. No code change needed; just document the
+contract in a short comment in each demo's `ui()` header.
+
+### C1b.3 — click-on-edge to insert vertex (Polygon Ops)
+
+Remove the three-way `EditMode { DragOnly, EditA, EditB }` toggle in favor
+of a mode-less interaction: clicking on an edge of either polygon inserts a
+vertex at the closest point on that edge.
+
+Rule: on `response.clicked()`, if `hover` is:
+1. Within `HIT_RADIUS` of an existing vertex → no-op (existing vertex
+   gets picked up by drag_started instead)
+2. Within `HIT_RADIUS` of a polygon edge segment → insert a new vertex at
+   the projection of hover onto the segment, bump that polygon's version
+3. Otherwise → no-op
+
+Removal: delete the `EditMode` enum, `mode` field on `PolygonOpsDemo`,
+`mode_mut()`, and the "EDIT MODE" sidebar section in `app.rs::polygon_ops_sidebar`.
+
+Helper needed: `nearest_polygon_edge(pos, polys) -> Option<(Side, edge_idx, t)>`
+returning which polygon, which edge index, and the parameter `t ∈ [0,1]`
+along the edge where the projection lands.
+
+**Acceptance (C1b)**
+
+- [ ] All four `HIT_RADIUS` constants = 10
+- [ ] Right-click semantics documented in comments
+- [ ] `EditMode` removed, `EDIT MODE` sidebar section removed
+- [ ] Click on a polygon edge inserts a vertex at the projected point
+- [ ] Click in empty space does nothing
+- [ ] Existing drag/right-click-delete flows still work
+- [ ] Test `click_on_edge_inserts_vertex_at_projection`
+- [ ] Commit: "CP9a: unify HIT_RADIUS, Polygon Ops click-on-edge insertion"
+
+---
+
 ## Checkpoint C2 — narrative and pedagogy pass (2-3 hrs)
 
 The single highest-ROI move tonight. Adds a new `EXPLAINER` section to every
@@ -334,10 +396,24 @@ the "Atomic-Semi-on-the-nose" stretch move.
 **Toggle**: `[ ] Weighted (power diagram)` in the Delaunay/Voronoi sidebar's
 LAYERS section.
 
-**Weight editing**: each site gets a "radius handle" — a ring drawn around it
-at `w_i` pixels. Dragging the ring tangentially resizes the weight (drag out
-= grow, drag in = shrink, can go negative). Initial weights: all 0 (reduces
-to standard Voronoi).
+**Weight editing**: hover over a site, scroll wheel adjusts its weight.
+Scroll up = grow, scroll down = shrink. Weights can go negative (site's
+cell shrinks toward zero and eventually vanishes when a neighbor dominates).
+Keeps the canvas free of extra handle chrome so the Delaunay/Voronoi edges
+remain the visual anchor.
+
+Visual indicator: a thin `ACCENT.linear_multiply(0.5)` ring around each
+site showing `sqrt(max(w_i, 0))` in pixels — gives a tangible sense of
+"heavier = bigger ring." Sites with negative weight render without a ring
+plus a faint cross-hatch, signaling "shrunk."
+
+Fallback if scroll conflicts with page scroll in the wasm build: small
+square handle at site's upper-right, low alpha until mouse is within ~30 px
+of the site, full alpha near-hover. Noted as fallback, not primary.
+
+Initial weights: all 0 (reduces to standard Voronoi). A one-shot
+"Randomize weights" button in the sidebar seeds a nonzero pattern so the
+effect is discoverable without being imposed.
 
 **Rendering**: when toggle is on, replace standard Voronoi cell computation
 with power-cell computation. Cell palette unchanged. Sites whose power cell
@@ -435,7 +511,7 @@ Executed sequentially, no exceptions.
 
 ## Cut order if behind
 
-Cut bottom-up. Never cut C1 or C5 — they are the floor.
+Cut bottom-up. Never cut C1, C1b, or C5 — they are the floor.
 
 1. **C4 Power diagrams** — already deferred once. Fine to defer again.
 2. **C2.3 Delaunay step-through** — keep the EXPLAINER prose additions, cut
@@ -498,11 +574,22 @@ in the commit body.
    until closer to the application? If the portfolio landing card needs the
    URL to link to, flipping tonight is required. **Default: flip tonight.**
 
-5. **Default weights for power diagrams** *(C4, if we reach it)*. Start all
-   at 0 (reduces to Voronoi) or use a position-derived nonzero pattern to
-   make the power-diagram effect visible on first load? **Default: all zero
-   + a one-shot "Randomize weights" button in the sidebar, so the effect is
-   discoverable but not imposed.**
+5. **Default weights for power diagrams** *(C4, if we reach it)*. **RESOLVED
+   per Hugh's feedback**: all zero on load, sidebar "Randomize weights"
+   button for discoverability. Input gesture: scroll wheel over hovered site.
+
+### Resolved by Hugh's input-handling review (2026-04-19)
+
+- **HIT_RADIUS** → unify to 10 px (was 8/8/8/10). Addressed in C1b.1.
+- **Right-click** → delete where logical, no-op elsewhere, never repurpose.
+  Current code already matches this rule; documented in C1b.2.
+- **Undo/Redo** → out of scope tonight. Low stakes given C/R shortcuts.
+- **Power diagram weight input** → scroll wheel while hovering, not a drag
+  handle. Updated in C4.1.
+- **Duality bidirectional hover** → confirmed, already in C3.3 acceptance
+  criteria.
+- **Polygon Ops edit mode** → replace three-way `EditMode` toggle with
+  click-on-edge vertex insertion. Addressed in C1b.3.
 
 ---
 
