@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Sense, Stroke};
+use eframe::egui::{self, CursorIcon, Pos2, Rect, Sense, Stroke};
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
@@ -186,13 +186,13 @@ impl CriticalAreaDemo {
         let mut best: Option<(Side, usize, f32)> = None;
         for (i, &p) in self.wire_a.iter().enumerate() {
             let d2 = (p - pos).length_sq();
-            if d2 <= r2 && best.map_or(true, |(_, _, bd)| d2 < bd) {
+            if d2 <= r2 && best.is_none_or(|(_, _, bd)| d2 < bd) {
                 best = Some((Side::A, i, d2));
             }
         }
         for (i, &p) in self.wire_b.iter().enumerate() {
             let d2 = (p - pos).length_sq();
-            if d2 <= r2 && best.map_or(true, |(_, _, bd)| d2 < bd) {
+            if d2 <= r2 && best.is_none_or(|(_, _, bd)| d2 < bd) {
                 best = Some((Side::B, i, d2));
             }
         }
@@ -295,7 +295,7 @@ fn dilate(poly: &[Pos2], radius: f32, seg_per_corner: usize) -> Vec<Pos2> {
 
         // Start angle = angle of n_in; end angle = angle of n_out.
         let a0 = n_in.y.atan2(n_in.x);
-        let mut a1 = n_out.y.atan2(n_out.x);
+        let a1 = n_out.y.atan2(n_out.x);
         // Ensure we sweep in the CCW direction consistent with the polygon's
         // outward side (here: the math-CCW orientation of outward normal turning).
         let mut delta = a1 - a0;
@@ -310,7 +310,6 @@ fn dilate(poly: &[Pos2], radius: f32, seg_per_corner: usize) -> Vec<Pos2> {
         // averaged normal. This keeps convex corners rounded and reflex corners
         // sharp, which i_overlay resolves cleanly.
         if delta <= std::f32::consts::PI {
-            let _ = &mut a1;
             let steps = seg_per_corner.max(1);
             for k in 0..=steps {
                 let t = k as f32 / steps as f32;
@@ -348,7 +347,6 @@ fn paint_polygon_outline(painter: &egui::Painter, poly: &[Pos2], stroke: Stroke)
     }
     let pts: Vec<Pos2> = poly.iter().copied().chain(std::iter::once(poly[0])).collect();
     painter.add(egui::Shape::line(pts, stroke));
-    let _ = Color32::TRANSPARENT;
 }
 
 fn paint_vertex_handles(

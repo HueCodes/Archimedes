@@ -6,7 +6,7 @@ use web_time::Instant;
 use crate::canvas;
 use crate::geometry::primitives::orient2d_naive;
 use crate::theme;
-use crate::ui::point_editor::{seeded_points, PointEditor};
+use crate::ui::point_editor::{next_seed, seeded_points, PointEditor};
 
 const INITIAL_SEED: u64 = 0x8F3A_2C71;
 const DEFAULT_INTERVAL_MS: u64 = 120;
@@ -98,11 +98,7 @@ impl ConvexHullDemo {
     pub fn random_into_last_rect(&mut self, n: usize) {
         if let Some(r) = self.last_rect {
             self.editor.set(seeded_points(r, n, self.seed));
-            // Step the seed so repeated Rs produce a new scene, still reproducible.
-            self.seed = self
-                .seed
-                .wrapping_mul(0x5851_F42D_4C95_7F2D)
-                .wrapping_add(0x14057B7E_F767_814F);
+            self.seed = next_seed(self.seed);
             self.anim = None;
         }
     }

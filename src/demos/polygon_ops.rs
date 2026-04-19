@@ -47,6 +47,30 @@ struct Cache {
     vertex_count: usize,
     area: f32,
     ms: f32,
+    euler: EulerCounts,
+}
+
+/// Topology readout for the overlay result, treated as a planar subdivision.
+/// For a set of disjoint simple polygons (outer contours) each of which may
+/// contain holes, with vertices V, edges E, and faces F (including the single
+/// unbounded face), Euler's formula for a planar graph with C connected
+/// components gives `V − E + F = 1 + C`. We report all four and flag when
+/// the invariant breaks.
+#[derive(Default, Clone, Copy)]
+pub struct EulerCounts {
+    pub v: usize,
+    pub e: usize,
+    pub f: usize,
+    pub components: usize,
+}
+
+impl EulerCounts {
+    pub fn chi(self) -> i64 {
+        self.v as i64 - self.e as i64 + self.f as i64
+    }
+    pub fn expected_chi(self) -> i64 {
+        1 + self.components as i64
+    }
 }
 
 impl Default for PolygonOpsDemo {
@@ -79,6 +103,13 @@ impl PolygonOpsDemo {
             None => (0, 0.0, 0.0),
         };
         (self.a.len(), self.b.len(), vcount, area, ms)
+    }
+
+    pub fn euler(&self) -> EulerCounts {
+        self.cache
+            .as_ref()
+            .map(|c| c.euler)
+            .unwrap_or_default()
     }
 
     pub fn clear(&mut self) {
@@ -246,13 +277,13 @@ impl PolygonOpsDemo {
         let mut best: Option<(Side, usize, f32)> = None;
         for (i, &p) in self.a.iter().enumerate() {
             let d2 = (p - pos).length_sq();
-            if d2 <= r2 && best.map_or(true, |(_, _, bd)| d2 < bd) {
+            if d2 <= r2 && best.is_none_or(|(_, _, bd)| d2 < bd) {
                 best = Some((Side::A, i, d2));
             }
         }
         for (i, &p) in self.b.iter().enumerate() {
             let d2 = (p - pos).length_sq();
-            if d2 <= r2 && best.map_or(true, |(_, _, bd)| d2 < bd) {
+            if d2 <= r2 && best.is_none_or(|(_, _, bd)| d2 < bd) {
                 best = Some((Side::B, i, d2));
             }
         }
@@ -281,10 +312,12 @@ impl PolygonOpsDemo {
         let mut result: Vec<Vec<Vec<Pos2>>> = Vec::new();
         let mut vcount = 0usize;
         let mut area = 0.0f32;
+        let mut ring_count = 0usize;
         for shape in raw {
             let mut shape_out: Vec<Vec<Pos2>> = Vec::new();
             for (i, contour) in shape.into_iter().enumerate() {
                 vcount += contour.len();
+                ring_count += 1;
                 let pts: Vec<Pos2> = contour.into_iter().map(|p| Pos2::new(p[0], p[1])).collect();
                 let s = signed_area(&pts);
                 if i == 0 {
@@ -297,6 +330,17 @@ impl PolygonOpsDemo {
             result.push(shape_out);
         }
 
+        // Every contour is a closed cycle of length k contributing k vertices
+        // and k edges. Faces: one per ring (outer = filled, hole = unfilled)
+        // plus the single unbounded face. Components = number of disjoint
+        // shapes (each outer ring with its holes is one component).
+        let euler = EulerCounts {
+            v: vcount,
+            e: vcount,
+            f: ring_count + 1,
+            components: result.len(),
+        };
+
         self.cache = Some(Cache {
             op: self.op,
             vers_a: self.vers_a,
@@ -305,6 +349,7 @@ impl PolygonOpsDemo {
             vertex_count: vcount,
             area,
             ms,
+            euler,
         });
     }
 }

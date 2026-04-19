@@ -139,12 +139,21 @@ impl eframe::App for App {
                     .fill(theme::BG)
                     .inner_margin(0.0),
             )
-            .show(ctx, |ui| match self.tab {
-                Tab::ConvexHull => self.convex_hull.ui(ui),
-                Tab::DelaunayVoronoi => self.voronoi.ui(ui),
-                Tab::PolygonOps => self.polygon_ops.ui(ui),
-                Tab::CriticalArea => self.critical_area.ui(ui),
-                Tab::Robustness => self.robustness.ui(ui),
+            .show(ctx, |ui| {
+                match self.tab {
+                    Tab::ConvexHull => self.convex_hull.ui(ui),
+                    Tab::DelaunayVoronoi => self.voronoi.ui(ui),
+                    Tab::PolygonOps => self.polygon_ops.ui(ui),
+                    Tab::CriticalArea => self.critical_area.ui(ui),
+                    Tab::Robustness => self.robustness.ui(ui),
+                }
+                let rect = ui.max_rect();
+                let inset = rect.shrink(0.5);
+                ui.painter().rect_stroke(
+                    inset,
+                    0.0,
+                    egui::Stroke::new(1.0, theme::FG_DIM.linear_multiply(0.25)),
+                );
             });
     }
 }
@@ -521,7 +530,7 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
     section_header(ui, "INVARIANT");
     ui.label(
         RichText::new(
-            "Voronoi cell of site p is the set of points closest to p. Delaunay is its dual: two sites share a Voronoi edge iff they share a Delaunay edge.",
+            "Voronoi cell of site p is the set of points closest to p. Delaunay is its dual: two sites share a Voronoi edge iff they share a Delaunay edge. Empty-circumcircle property: no site lies strictly inside the circumcircle of any Delaunay triangle.",
         )
         .size(12.5)
         .color(theme::FG.linear_multiply(0.85)),
@@ -560,6 +569,7 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
     ui.checkbox(demo.show_voronoi_mut(), "Voronoi cells");
     ui.checkbox(demo.show_delaunay_mut(), "Delaunay edges");
     ui.checkbox(demo.show_circumcircle_mut(), "Circumcircles on hover");
+    ui.checkbox(demo.show_all_circumcircles_mut(), "Empty circumcircles (all)");
 
     ui.add_space(14.0);
     section_header(ui, "FOCUS");
@@ -690,6 +700,29 @@ fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
     metric_line(ui, "build", &format!("{ms:.2} ms"));
 
     ui.add_space(14.0);
+    section_header(ui, "EULER");
+    let eul = demo.euler();
+    metric_line(ui, "V", &format!("{}", eul.v));
+    metric_line(ui, "E", &format!("{}", eul.e));
+    metric_line(ui, "F", &format!("{}", eul.f));
+    metric_line(ui, "components", &format!("{}", eul.components));
+    let chi = eul.chi();
+    let expected = eul.expected_chi();
+    let (label, color) = if eul.v == 0 {
+        ("—", theme::FG_DIM)
+    } else if chi == expected {
+        ("V − E + F = 1 + C", theme::OK)
+    } else {
+        ("invariant broken", theme::WARN)
+    };
+    ui.label(
+        RichText::new(label)
+            .monospace()
+            .size(11.0)
+            .color(color),
+    );
+
+    ui.add_space(14.0);
     section_header(ui, "REFERENCES");
     ui.label(RichText::new("Vatti (1992) · Greiner-Hormann (1998)").size(12.0).color(theme::FG_DIM));
     ui.label(RichText::new("i_overlay crate").size(12.0).color(theme::FG_DIM));
@@ -717,9 +750,7 @@ fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
 
     ui.add_space(14.0);
     section_header(ui, "DEFECT RADIUS");
-    let r = *demo.radius_mut();
     ui.add(egui::Slider::new(demo.radius_mut(), 0.0..=80.0).text("r (px)"));
-    let _ = r;
 
     ui.add_space(14.0);
     section_header(ui, "LIVE");

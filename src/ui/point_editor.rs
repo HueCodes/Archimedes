@@ -130,12 +130,19 @@ impl PointEditor {
         let mut best: Option<(usize, f32)> = None;
         for (i, &p) in self.points.iter().enumerate() {
             let d2 = (p - pos).length_sq();
-            if d2 <= r2 && best.map_or(true, |(_, bd)| d2 < bd) {
+            if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((i, d2));
             }
         }
         best.map(|(i, _)| i)
     }
+}
+
+/// Step an LCG seed so that repeated calls to `seeded_points` produce a new but
+/// still-reproducible scene. Used by the per-demo Random buttons.
+pub fn next_seed(seed: u64) -> u64 {
+    seed.wrapping_mul(0x5851_F42D_4C95_7F2D)
+        .wrapping_add(0x1405_7B7E_F767_814F)
 }
 
 /// Deterministic xorshift64 fill of `rect` (inset by 40px) with `n` points.

@@ -1,11 +1,11 @@
-use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Sense, Stroke};
+use eframe::egui::{self, CursorIcon, Pos2, Rect, Sense, Stroke};
 
 use crate::canvas;
 use crate::geometry::primitives::{orient2d_naive, orient2d_robust};
 use crate::theme;
 
 const HIT_RADIUS: f32 = 10.0;
-const GRID_CELLS: usize = 44;
+const GRID_CELLS: usize = 96;
 
 pub struct RobustnessDemo {
     a: Pos2,
@@ -115,8 +115,11 @@ impl RobustnessDemo {
             }
         }
 
-        if self.show_diff_field {
-            paint_disagreement_field(&painter, rect, self.a, self.b);
+        let field_alpha = ui
+            .ctx()
+            .animate_bool(egui::Id::new("rb_show_diff_field"), self.show_diff_field);
+        if field_alpha > 0.01 {
+            paint_disagreement_field(&painter, rect, self.a, self.b, field_alpha);
         }
 
         let line_color = theme::FG_DIM.linear_multiply(0.85);
@@ -164,7 +167,7 @@ impl RobustnessDemo {
         let mut best: Option<(Which, f32)> = None;
         for (w, p) in [(Which::A, self.a), (Which::B, self.b), (Which::C, self.c)] {
             let d2 = (p - pos).length_sq();
-            if d2 <= r2 && best.map_or(true, |(_, bd)| d2 < bd) {
+            if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((w, d2));
             }
         }
@@ -196,42 +199,61 @@ fn extend_line(rect: Rect, a: Pos2, b: Pos2) -> (Pos2, Pos2) {
     )
 }
 
-/// Visit a coarse grid of sample points across the viewport. At each cell,
-/// compare orient2d_naive (f32) against orient2d_robust (f64): where the signs
-/// disagree, shade the cell in WARN; otherwise leave it transparent. The
-/// unstable strip hugs the AB line and flanks both sides within ~1 cell of
-/// cancellation. This is the whole point of the tab.
-fn paint_disagreement_field(painter: &egui::Painter, rect: Rect, a: Pos2, b: Pos2) {
+/// Shade cells near the AB line where f32 has shed enough bits of precision
+/// that the orient2d sign can't be trusted. We mark cells whose naive f32 value
+/// falls inside Shewchuk's static error bound (scaled for visibility): that
+/// band is a strict superset of the sign-flip strip and, unlike the flip strip,
+/// is wide enough to hit grid cell centers at screen-space coordinates. The
+/// true sign-flip region for typical screen coords is sub-pixel — previously
+/// the visualization only "flashed" when A/B happened to land on lucky cells.
+fn paint_disagreement_field(painter: &egui::Painter, rect: Rect, a: Pos2, b: Pos2, alpha: f32) {
     let cell_w = rect.width() / GRID_CELLS as f32;
     let cell_h = rect.height() / GRID_CELLS as f32;
-    let disagree = theme::WARN.linear_multiply(0.28);
+    let zone = theme::WARN.linear_multiply(0.25 * alpha);
     for gy in 0..GRID_CELLS {
         for gx in 0..GRID_CELLS {
             let px = rect.min.x + (gx as f32 + 0.5) * cell_w;
             let py = rect.min.y + (gy as f32 + 0.5) * cell_h;
             let p = Pos2::new(px, py);
-            let n = orient2d_naive(a, b, p);
-            let r = orient2d_robust(a, b, p);
-            if sign(n as f64) != sign(r) {
+            if f32_precision_lost(a, b, p) {
                 let cell_rect = Rect::from_min_size(
                     Pos2::new(rect.min.x + gx as f32 * cell_w, rect.min.y + gy as f32 * cell_h),
                     egui::vec2(cell_w, cell_h),
                 );
-                painter.rect_filled(cell_rect, 0.0, disagree);
+                painter.rect_filled(cell_rect, 0.0, zone);
             }
         }
     }
-    // Legend strip in the corner.
     let legend = Rect::from_min_size(rect.min + egui::vec2(12.0, 12.0), egui::vec2(10.0, 10.0));
-    painter.rect_filled(legend, 2.0, disagree);
+    painter.rect_filled(legend, 2.0, zone);
     painter.text(
         legend.right_center() + egui::vec2(6.0, 0.0),
         egui::Align2::LEFT_CENTER,
-        "naive vs robust disagree",
+        "f32 sign untrustworthy",
         egui::FontId::monospace(11.0),
-        theme::FG_DIM,
+        theme::FG_DIM.linear_multiply(alpha),
     );
-    let _ = Color32::TRANSPARENT;
+}
+
+/// Inside-the-band test. Distance from `p` to the AB line, compared to a band
+/// thickness that scales with the largest involved coordinate magnitude. Real
+/// f32 precision loss for orient2d is `~ε · (coord_magnitude)²`, which maps to
+/// a sub-pixel band at screen coords; `VIS_GAIN` scales that up into the visible
+/// range while preserving the physics — push points far from the origin and the
+/// untrustworthy zone widens, just as it does on a real wafer coordinate system.
+fn f32_precision_lost(a: Pos2, b: Pos2, p: Pos2) -> bool {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let ab_len = (dx * dx + dy * dy).sqrt();
+    if ab_len < 1.0 {
+        return false;
+    }
+    let dist = (dx * (p.y - a.y) - dy * (p.x - a.x)).abs() / ab_len;
+    const EPS: f32 = f32::EPSILON;
+    const VIS_GAIN: f32 = 1.0e5;
+    let mag = a.x.abs().max(a.y.abs()).max(p.x.abs()).max(p.y.abs());
+    let band = VIS_GAIN * EPS * mag;
+    dist < band
 }
 
 #[cfg(test)]
@@ -244,6 +266,16 @@ mod tests {
         let r = d.readout();
         assert!(r.naive.abs() < 1.0);
         assert!(r.robust.abs() < 1.0);
+    }
+
+    #[test]
+    fn precision_band_hugs_ab_line_at_default_preset() {
+        let a = Pos2::new(320.0, 400.0);
+        let b = Pos2::new(760.0, 400.0005);
+        assert!(f32_precision_lost(a, b, Pos2::new(540.0, 400.0)));
+        assert!(f32_precision_lost(a, b, Pos2::new(540.0, 402.0)));
+        assert!(!f32_precision_lost(a, b, Pos2::new(540.0, 500.0)));
+        assert!(!f32_precision_lost(a, b, Pos2::new(540.0, 300.0)));
     }
 
     #[test]

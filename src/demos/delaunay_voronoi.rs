@@ -5,7 +5,7 @@ use web_time::Instant;
 
 use crate::canvas;
 use crate::theme;
-use crate::ui::point_editor::{seeded_points, PointEditor};
+use crate::ui::point_editor::{next_seed, seeded_points, PointEditor};
 
 const INITIAL_SEED: u64 = 0x2BD1_F3C7;
 
@@ -16,6 +16,7 @@ pub struct DelaunayVoronoiDemo {
     show_delaunay: bool,
     show_voronoi: bool,
     show_circumcircle: bool,
+    show_all_circumcircles: bool,
     cache: Option<Cache>,
     triangles: usize,
     last_ms: f32,
@@ -58,6 +59,7 @@ impl Default for DelaunayVoronoiDemo {
             show_delaunay: true,
             show_voronoi: true,
             show_circumcircle: true,
+            show_all_circumcircles: false,
             cache: None,
             triangles: 0,
             last_ms: 0.0,
@@ -95,10 +97,7 @@ impl DelaunayVoronoiDemo {
     pub fn random_into_last_rect(&mut self, n: usize) {
         if let Some(r) = self.last_rect {
             self.editor.set(seeded_points(r, n, self.seed));
-            self.seed = self
-                .seed
-                .wrapping_mul(0x5851_F42D_4C95_7F2D)
-                .wrapping_add(0x14057B7E_F767_814F);
+            self.seed = next_seed(self.seed);
             self.cache = None;
         }
     }
@@ -111,6 +110,9 @@ impl DelaunayVoronoiDemo {
     }
     pub fn show_circumcircle_mut(&mut self) -> &mut bool {
         &mut self.show_circumcircle
+    }
+    pub fn show_all_circumcircles_mut(&mut self) -> &mut bool {
+        &mut self.show_all_circumcircles
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
@@ -165,22 +167,32 @@ impl DelaunayVoronoiDemo {
         let hover = frame.response.hover_pos();
         let hover_vertex = hover.and_then(|h| nearest_vertex(t, h, 14.0));
 
-        if self.show_voronoi {
-            paint_voronoi_cells(&frame.painter, t, viewport);
+        let ctx = ui.ctx();
+        let voronoi_a = ctx.animate_bool(egui::Id::new("dv_show_voronoi"), self.show_voronoi);
+        let delaunay_a = ctx.animate_bool(egui::Id::new("dv_show_delaunay"), self.show_delaunay);
+        let circle_a = ctx.animate_bool(egui::Id::new("dv_show_circumcircle"), self.show_circumcircle);
+        let all_circles_a = ctx.animate_bool(
+            egui::Id::new("dv_show_all_circumcircles"),
+            self.show_all_circumcircles,
+        );
+
+        if voronoi_a > 0.01 {
+            paint_voronoi_cells(&frame.painter, t, viewport, voronoi_a);
+            paint_voronoi_edges(&frame.painter, t, viewport, voronoi_a);
         }
-        if self.show_voronoi {
-            paint_voronoi_edges(&frame.painter, t, viewport);
+        if all_circles_a > 0.01 {
+            paint_all_circumcircles(&frame.painter, t, viewport, all_circles_a);
         }
-        if self.show_delaunay {
-            paint_delaunay_edges(&frame.painter, t);
+        if delaunay_a > 0.01 {
+            paint_delaunay_edges(&frame.painter, t, delaunay_a);
         }
 
         self.focus = hover_vertex.map(|v| compute_focus(t, v, viewport));
 
         if let Some(v) = hover_vertex {
             highlight_cell(&frame.painter, t, v, viewport);
-            if self.show_circumcircle {
-                paint_incident_circumcircles(&frame.painter, t, v, viewport);
+            if circle_a > 0.01 {
+                paint_incident_circumcircles(&frame.painter, t, v, viewport, circle_a);
             }
         }
 
@@ -250,7 +262,7 @@ fn nearest_vertex(
         let dx = p.x - pos.x;
         let dy = p.y - pos.y;
         let d2 = dx * dx + dy * dy;
-        if d2 <= r2 && best.map_or(true, |(_, bd)| d2 < bd) {
+        if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
             best = Some((v.fix(), d2));
         }
     }
@@ -271,6 +283,7 @@ fn paint_voronoi_cells(
     painter: &egui::Painter,
     t: &DelaunayTriangulation<Point2<f32>>,
     viewport: Rect,
+    alpha: f32,
 ) {
     let palette = cell_colors();
     let far_scale = (viewport.width() + viewport.height()) * 4.0;
@@ -285,7 +298,7 @@ fn paint_voronoi_cells(
         if clipped.len() < 3 {
             continue;
         }
-        let color = palette[i % palette.len()].linear_multiply(0.22);
+        let color = palette[i % palette.len()].linear_multiply(0.22 * alpha);
         painter.add(egui::Shape::convex_polygon(
             clipped,
             color,
@@ -298,8 +311,9 @@ fn paint_voronoi_edges(
     painter: &egui::Painter,
     t: &DelaunayTriangulation<Point2<f32>>,
     viewport: Rect,
+    alpha: f32,
 ) {
-    let stroke = Stroke::new(1.25, theme::FG.linear_multiply(0.45));
+    let stroke = Stroke::new(1.25, theme::FG.linear_multiply(0.45 * alpha));
     let far_scale = (viewport.width() + viewport.height()) * 4.0;
     let clip = rect_to_poly(viewport);
 
@@ -316,8 +330,8 @@ fn paint_voronoi_edges(
     }
 }
 
-fn paint_delaunay_edges(painter: &egui::Painter, t: &DelaunayTriangulation<Point2<f32>>) {
-    let stroke = Stroke::new(1.1, theme::ACCENT.linear_multiply(0.75));
+fn paint_delaunay_edges(painter: &egui::Painter, t: &DelaunayTriangulation<Point2<f32>>, alpha: f32) {
+    let stroke = Stroke::new(1.1, theme::ACCENT.linear_multiply(0.75 * alpha));
     for edge in t.undirected_edges() {
         let [a, b] = edge.vertices();
         let pa = Pos2::new(a.position().x, a.position().y);
@@ -350,14 +364,37 @@ fn highlight_cell(
     ));
 }
 
+/// Every inner Delaunay triangle's circumcircle, rendered faintly. Demonstrates
+/// the empty-circumcircle property: for each triangle, no other site lies
+/// inside the drawn circle. Off by default because it's visually busy for
+/// large point sets.
+fn paint_all_circumcircles(
+    painter: &egui::Painter,
+    t: &DelaunayTriangulation<Point2<f32>>,
+    viewport: Rect,
+    alpha: f32,
+) {
+    let stroke = Stroke::new(0.75, theme::VIOLET.linear_multiply(0.35 * alpha));
+    for face in t.inner_faces() {
+        let (c, r2) = face.circumcircle();
+        let center = Pos2::new(c.x, c.y);
+        let radius = r2.max(0.0).sqrt();
+        if !viewport.expand(radius + 20.0).contains(center) {
+            continue;
+        }
+        painter.circle_stroke(center, radius, stroke);
+    }
+}
+
 fn paint_incident_circumcircles(
     painter: &egui::Painter,
     t: &DelaunayTriangulation<Point2<f32>>,
     fv: spade::handles::FixedVertexHandle,
     viewport: Rect,
+    alpha: f32,
 ) {
     let vertex = t.vertex(fv);
-    let stroke = Stroke::new(1.0, theme::FG_DIM.linear_multiply(0.8));
+    let stroke = Stroke::new(1.0, theme::FG_DIM.linear_multiply(0.8 * alpha));
     for edge in vertex.out_edges() {
         if let Some(face) = edge.face().as_inner() {
             let (c, r2) = face.circumcircle();
