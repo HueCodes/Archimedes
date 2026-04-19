@@ -58,14 +58,32 @@ impl RobustnessDemo {
 
     pub fn reset(&mut self) {
         let keep = self.show_diff_field;
+        let rect = self.last_rect;
         *self = Self::default();
         self.show_diff_field = keep;
+        self.last_rect = rect;
+        self.preset_nearly_collinear();
     }
 
+    /// Place A, B, C as a near-collinear triple centered in the current canvas.
+    /// Falls back to fixed coordinates if the canvas hasn't been measured yet
+    /// (the first frame's `ui()` calls this immediately after capturing the
+    /// rect, so the fallback is rarely hit). Canvas-relative positioning means
+    /// resizing the window or reloading the preset always lands the points
+    /// inside the visible area, instead of stranding them in the old viewport.
     pub fn preset_nearly_collinear(&mut self) {
-        self.a = Pos2::new(320.0, 400.0);
-        self.b = Pos2::new(760.0, 400.0005);
-        self.c = Pos2::new(540.0, 400.00025);
+        let rect = self.last_rect.unwrap_or_else(|| {
+            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(900.0, 700.0))
+        });
+        let cx = rect.center().x;
+        let cy = rect.center().y;
+        let half_span = (rect.width() * 0.3).clamp(160.0, 360.0);
+        // The y-offsets are deliberately sub-pixel — that's the entire point of
+        // the demo. f32 can't resolve them, the line through A and B stays at
+        // y = cy on screen, but orient2d's product loses bits and may flip.
+        self.a = Pos2::new(cx - half_span, cy);
+        self.b = Pos2::new(cx + half_span, cy + 0.0005);
+        self.c = Pos2::new(cx, cy + 0.00025);
     }
 
     pub fn readout(&self) -> Readout {
@@ -95,7 +113,11 @@ impl RobustnessDemo {
         let size = ui.available_size();
         let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
         let rect = painter.clip_rect();
+        let first_frame = self.last_rect.is_none();
         self.last_rect = Some(rect);
+        if first_frame {
+            self.preset_nearly_collinear();
+        }
         canvas::paint_grid(&painter, rect);
 
         let hover = response.hover_pos();

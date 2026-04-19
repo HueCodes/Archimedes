@@ -879,7 +879,7 @@ fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
     section_header(ui, "EXPLAINER");
     ui.label(
         RichText::new(
-            "VLSI yield modeling. A point defect of radius r causes a short between mask features A and B iff its center lies in the Minkowski intersection dilate(A, r/2) ∩ dilate(B, r/2). Integrating that area over a defect-size distribution gives the expected shorts per wafer.",
+            "VLSI yield modeling. A point defect of radius r causes a short between mask features A and B iff its center lies in the Minkowski intersection of dilate(A, r/2) and dilate(B, r/2). Integrating that area over a defect-size distribution gives the expected shorts per wafer.",
         )
         .size(13.0)
         .color(theme::FG.linear_multiply(0.9)),
@@ -911,7 +911,7 @@ fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
     section_header(ui, "INVARIANT");
     ui.label(
         RichText::new(
-            "A disk of radius r centered at point p bridges features A and B iff p lies in dilate(A, r/2) ∩ dilate(B, r/2).",
+            "A disk of radius r centered at point p bridges features A and B iff p lies in both dilate(A, r/2) and dilate(B, r/2).",
         )
         .size(12.5)
         .color(theme::FG.linear_multiply(0.85)),
