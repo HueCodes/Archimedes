@@ -11,6 +11,7 @@ use crate::ui::point_editor::{next_seed, seeded_points, PointEditor, HIT_RADIUS}
 const INITIAL_SEED: u64 = 0x2BD1_F3C7;
 const WEIGHT_CLAMP: f32 = 1500.0;
 const WEIGHT_PER_SCROLL: f32 = 4.0;
+pub const STEP_INTERVAL_MS: u64 = 350;
 
 pub struct DelaunayVoronoiDemo {
     editor: PointEditor,
@@ -23,11 +24,24 @@ pub struct DelaunayVoronoiDemo {
     show_power: bool,
     weights: Vec<f32>,
     weight_seed: u64,
+    anim: StepThrough,
     cache: Option<Cache>,
     triangles: usize,
     last_ms: f32,
     euler: Euler,
     focus: Option<Focus>,
+}
+
+/// Bowyer-Watson step-through state. Granularity is "one inserted site per
+/// step" rather than "one flip per step" — spade doesn't expose its internal
+/// flip events, so we replay by rebuilding the triangulation of the first k
+/// points on demand. n ≤ 200 sites makes that cheap (sub-ms).
+#[derive(Default)]
+struct StepThrough {
+    enabled: bool,
+    step: usize,
+    playing: bool,
+    last_tick: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -53,7 +67,14 @@ impl Euler {
 
 struct Cache {
     version: u64,
+    /// `None` = full triangulation; `Some(k)` = triangulation of the first k
+    /// points. Step changes invalidate the cache the same way version bumps do.
+    step: Option<usize>,
     triangulation: DelaunayTriangulation<Point2<f32>>,
+    /// Triangulation of the first `step - 1` points, kept alongside the current
+    /// one during step-through so we can identify the "bad triangles" that the
+    /// just-inserted site removed.
+    triangulation_prev: Option<DelaunayTriangulation<Point2<f32>>>,
 }
 
 impl Default for DelaunayVoronoiDemo {
@@ -69,6 +90,7 @@ impl Default for DelaunayVoronoiDemo {
             show_power: false,
             weights: Vec::new(),
             weight_seed: 0x9E37_79B9_u64,
+            anim: StepThrough::default(),
             cache: None,
             triangles: 0,
             last_ms: 0.0,
@@ -102,6 +124,7 @@ impl DelaunayVoronoiDemo {
         self.triangles = 0;
         self.last_ms = 0.0;
         self.euler = Euler::default();
+        self.step_reset();
     }
 
     pub fn random_into_last_rect(&mut self, n: usize) {
@@ -110,6 +133,7 @@ impl DelaunayVoronoiDemo {
             self.seed = next_seed(self.seed);
             self.weights = vec![0.0; n];
             self.cache = None;
+            self.step_reset();
         }
     }
 
@@ -146,6 +170,59 @@ impl DelaunayVoronoiDemo {
         for w in &mut self.weights {
             *w = 0.0;
         }
+    }
+
+    pub fn step_through_enabled(&self) -> bool {
+        self.anim.enabled
+    }
+    pub fn set_step_through(&mut self, enabled: bool) {
+        if enabled == self.anim.enabled {
+            return;
+        }
+        self.anim.enabled = enabled;
+        self.anim.playing = false;
+        self.anim.last_tick = None;
+        if enabled {
+            self.anim.step = 0;
+        }
+    }
+    /// `(step, total, playing, enabled)` — used by the sidebar to render the
+    /// progress line and gate the play / step buttons.
+    pub fn step_state(&self) -> (usize, usize, bool, bool) {
+        let total = self.editor.len();
+        let step = self.anim.step.min(total);
+        (step, total, self.anim.playing, self.anim.enabled)
+    }
+    pub fn toggle_step_play(&mut self) {
+        if !self.anim.enabled {
+            return;
+        }
+        self.anim.playing = !self.anim.playing;
+        self.anim.last_tick = None;
+    }
+    pub fn step_advance(&mut self) {
+        if !self.anim.enabled {
+            return;
+        }
+        let n = self.editor.len();
+        if self.anim.step < n {
+            self.anim.step += 1;
+        }
+        self.anim.playing = false;
+    }
+    pub fn step_back(&mut self) {
+        if !self.anim.enabled {
+            return;
+        }
+        if self.anim.step > 0 {
+            self.anim.step -= 1;
+        }
+        self.anim.playing = false;
+    }
+    pub fn step_reset(&mut self) {
+        self.anim.step = 0;
+        self.anim.playing = false;
+        self.anim.last_tick = None;
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
@@ -194,22 +271,64 @@ impl DelaunayVoronoiDemo {
         }
 
         let version = self.editor.version();
+
+        // Step-through auto-advance — fires once per `STEP_INTERVAL_MS` while
+        // playing, stops when we run out of points.
+        if self.anim.enabled && self.anim.playing {
+            let n = self.editor.len();
+            if self.anim.step >= n {
+                self.anim.playing = false;
+            } else {
+                let now = Instant::now();
+                let due = match self.anim.last_tick {
+                    Some(t) => (now - t).as_millis() >= STEP_INTERVAL_MS as u128,
+                    None => true,
+                };
+                if due {
+                    self.anim.step += 1;
+                    self.anim.last_tick = Some(now);
+                }
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(STEP_INTERVAL_MS));
+            }
+        }
+
+        // The cache key is (version, step). Step-through invalidates by step;
+        // out of step-through `step` is None and we cache the full triangulation.
+        let target_step = if self.anim.enabled {
+            Some(self.anim.step.min(self.editor.len()))
+        } else {
+            None
+        };
         let need_rebuild = self
             .cache
             .as_ref()
-            .map(|c| c.version != version)
+            .map(|c| c.version != version || c.step != target_step)
             .unwrap_or(true);
 
         if need_rebuild {
             let t0 = Instant::now();
+            let n_curr = target_step.unwrap_or(self.editor.len());
             let mut t = DelaunayTriangulation::<Point2<f32>>::new();
-            for &p in self.editor.points() {
+            for &p in self.editor.points().iter().take(n_curr) {
                 let _ = t.insert(Point2::new(p.x, p.y));
             }
+            let t_prev = match target_step {
+                Some(k) if k > 0 => {
+                    let mut tp = DelaunayTriangulation::<Point2<f32>>::new();
+                    for &p in self.editor.points().iter().take(k - 1) {
+                        let _ = tp.insert(Point2::new(p.x, p.y));
+                    }
+                    Some(tp)
+                }
+                _ => None,
+            };
             self.last_ms = t0.elapsed().as_secs_f32() * 1000.0;
             self.cache = Some(Cache {
                 version,
+                step: target_step,
                 triangulation: t,
+                triangulation_prev: t_prev,
             });
         }
 
@@ -224,7 +343,14 @@ impl DelaunayVoronoiDemo {
 
         let viewport = frame.rect;
         let hover = frame.response.hover_pos();
-        let hover_vertex = hover.and_then(|h| nearest_vertex(t, h, 14.0));
+        // Hover-driven inspection is meaningless mid-replay (the focused cell
+        // would belong to a partial triangulation), so suppress hover during
+        // step-through and let the highlight track the just-inserted site.
+        let hover_vertex = if self.anim.enabled {
+            None
+        } else {
+            hover.and_then(|h| nearest_vertex(t, h, 14.0))
+        };
 
         let ctx = ui.ctx();
         // Voronoi cells and power cells are mutually exclusive: turning power on
@@ -272,8 +398,29 @@ impl DelaunayVoronoiDemo {
             paint_weight_indicators(&frame.painter, self.editor.points(), &self.weights);
         }
 
-        self.editor
-            .paint(&frame.painter, theme::FG, frame.response.hover_pos());
+        // Step-through: shade the triangles whose circumcircle contained the
+        // just-inserted site — these are exactly the ones Bowyer-Watson would
+        // remove and re-fan around the new vertex.
+        if self.anim.enabled && self.anim.step > 0 {
+            if let (Some(target), Some(t_prev)) = (
+                self.editor.points().get(self.anim.step - 1).copied(),
+                cache.triangulation_prev.as_ref(),
+            ) {
+                paint_bad_triangles(&frame.painter, t_prev, target);
+            }
+        }
+
+        // Point paint: in step-through, only render sites that have been inserted
+        // and highlight the most recent one in WARN. Otherwise fall back to the
+        // standard hover-driven highlight.
+        if self.anim.enabled {
+            let step = self.anim.step.min(self.editor.len());
+            let target_idx = if step > 0 { Some(step - 1) } else { None };
+            paint_inserted_sites(&frame.painter, self.editor.points(), step, target_idx);
+        } else {
+            self.editor
+                .paint(&frame.painter, theme::FG, frame.response.hover_pos());
+        }
     }
 }
 
@@ -716,6 +863,41 @@ fn paint_power_cells(
             let b = cell[(k + 1) % cell.len()];
             painter.line_segment([a, b], edge_stroke);
         }
+    }
+}
+
+/// Step-through: shade the triangles in `t_prev` whose circumcircle contains
+/// `target`. Those are the "bad triangles" Bowyer-Watson would remove on the
+/// next insertion, the visual signature of the algorithm.
+fn paint_bad_triangles(
+    painter: &egui::Painter,
+    t_prev: &DelaunayTriangulation<Point2<f32>>,
+    target: Pos2,
+) {
+    let stroke = Stroke::new(1.5, theme::WARN);
+    let fill = theme::WARN.linear_multiply(0.18);
+    for face in t_prev.inner_faces() {
+        let (c, r2) = face.circumcircle();
+        let dx = c.x - target.x;
+        let dy = c.y - target.y;
+        if dx * dx + dy * dy < r2 {
+            let verts = face.vertices();
+            let pts = vec![
+                Pos2::new(verts[0].position().x, verts[0].position().y),
+                Pos2::new(verts[1].position().x, verts[1].position().y),
+                Pos2::new(verts[2].position().x, verts[2].position().y),
+            ];
+            painter.add(egui::Shape::convex_polygon(pts, fill, stroke));
+        }
+    }
+}
+
+/// Step-through point paint: only the first `step` sites are visible, with the
+/// just-inserted one (`target`) highlighted in WARN.
+fn paint_inserted_sites(painter: &egui::Painter, sites: &[Pos2], step: usize, target: Option<usize>) {
+    for (i, &p) in sites.iter().enumerate().take(step) {
+        let color = if Some(i) == target { theme::WARN } else { theme::FG };
+        canvas::paint_point(painter, p, color);
     }
 }
 

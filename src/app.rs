@@ -2,7 +2,7 @@ use eframe::egui::{self, Align, Layout, RichText, Vec2};
 
 use crate::demos::convex_hull::ConvexHullDemo;
 use crate::demos::critical_area::CriticalAreaDemo;
-use crate::demos::delaunay_voronoi::DelaunayVoronoiDemo;
+use crate::demos::delaunay_voronoi::{DelaunayVoronoiDemo, STEP_INTERVAL_MS as DV_STEP_MS};
 use crate::demos::polygon_ops::{PolygonOpsDemo, Preset};
 use crate::demos::robustness::RobustnessDemo;
 use crate::theme;
@@ -94,8 +94,20 @@ impl App {
                     _ => {}
                 }
             }
-            if i.key_pressed(egui::Key::Space) && self.tab == Tab::ConvexHull {
-                self.convex_hull.toggle_play();
+            if i.key_pressed(egui::Key::Space) {
+                match self.tab {
+                    Tab::ConvexHull => self.convex_hull.toggle_play(),
+                    Tab::DelaunayVoronoi => self.voronoi.toggle_step_play(),
+                    _ => {}
+                }
+            }
+            if self.tab == Tab::DelaunayVoronoi {
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    self.voronoi.step_advance();
+                }
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    self.voronoi.step_back();
+                }
             }
         });
     }
@@ -368,6 +380,7 @@ fn left_panel(
             shortcut_line(ui, "R", "random");
             shortcut_line(ui, "1-5", "switch demo");
             shortcut_line(ui, "Space", "play · pause");
+            shortcut_line(ui, "← →", "step (D/V)");
         });
 }
 
@@ -621,6 +634,61 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
     ui.checkbox(demo.show_delaunay_mut(), "Delaunay edges");
     ui.checkbox(demo.show_circumcircle_mut(), "Circumcircles on hover");
     ui.checkbox(demo.show_all_circumcircles_mut(), "Empty circumcircles (all)");
+
+    ui.add_space(14.0);
+    section_header(ui, "ANIMATION");
+    let mut step_on = demo.step_through_enabled();
+    if ui
+        .checkbox(&mut step_on, "Step through Bowyer-Watson")
+        .changed()
+    {
+        demo.set_step_through(step_on);
+    }
+    let (step, total, playing, enabled) = demo.step_state();
+    ui.horizontal(|ui| {
+        let play_label = if playing { "Pause" } else { "Play" };
+        if ui
+            .add_enabled(enabled && total > 0, egui::Button::new(play_label))
+            .clicked()
+        {
+            demo.toggle_step_play();
+        }
+        if ui
+            .add_enabled(enabled && step > 0, egui::Button::new("◀"))
+            .clicked()
+        {
+            demo.step_back();
+        }
+        if ui
+            .add_enabled(enabled && step < total, egui::Button::new("▶"))
+            .clicked()
+        {
+            demo.step_advance();
+        }
+        if ui
+            .add_enabled(enabled, egui::Button::new("Reset"))
+            .clicked()
+        {
+            demo.step_reset();
+        }
+    });
+    metric_line(
+        ui,
+        "step",
+        &if total > 0 {
+            format!("{step} / {total}")
+        } else {
+            "—".to_string()
+        },
+    );
+    metric_line(ui, "interval", &format!("{DV_STEP_MS} ms"));
+    if enabled {
+        ui.label(
+            RichText::new("WARN-shaded triangles are about to be removed (their circumcircle contains the new site)")
+                .size(11.0)
+                .color(theme::FG_DIM),
+        );
+    }
 
     ui.add_space(14.0);
     section_header(ui, "POWER DIAGRAM");
