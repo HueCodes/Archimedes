@@ -4,10 +4,13 @@ use spade::{DelaunayTriangulation, Point2, Triangulation};
 use web_time::Instant;
 
 use crate::canvas;
+use crate::geometry::power_diagram::compute_power_cell;
 use crate::theme;
-use crate::ui::point_editor::{next_seed, seeded_points, PointEditor};
+use crate::ui::point_editor::{next_seed, seeded_points, PointEditor, HIT_RADIUS};
 
 const INITIAL_SEED: u64 = 0x2BD1_F3C7;
+const WEIGHT_CLAMP: f32 = 1500.0;
+const WEIGHT_PER_SCROLL: f32 = 4.0;
 
 pub struct DelaunayVoronoiDemo {
     editor: PointEditor,
@@ -17,6 +20,9 @@ pub struct DelaunayVoronoiDemo {
     show_voronoi: bool,
     show_circumcircle: bool,
     show_all_circumcircles: bool,
+    show_power: bool,
+    weights: Vec<f32>,
+    weight_seed: u64,
     cache: Option<Cache>,
     triangles: usize,
     last_ms: f32,
@@ -60,6 +66,9 @@ impl Default for DelaunayVoronoiDemo {
             show_voronoi: true,
             show_circumcircle: true,
             show_all_circumcircles: false,
+            show_power: false,
+            weights: Vec::new(),
+            weight_seed: 0x9E37_79B9_u64,
             cache: None,
             triangles: 0,
             last_ms: 0.0,
@@ -88,6 +97,7 @@ impl DelaunayVoronoiDemo {
 
     pub fn clear(&mut self) {
         self.editor.clear();
+        self.weights.clear();
         self.cache = None;
         self.triangles = 0;
         self.last_ms = 0.0;
@@ -98,6 +108,7 @@ impl DelaunayVoronoiDemo {
         if let Some(r) = self.last_rect {
             self.editor.set(seeded_points(r, n, self.seed));
             self.seed = next_seed(self.seed);
+            self.weights = vec![0.0; n];
             self.cache = None;
         }
     }
@@ -114,11 +125,59 @@ impl DelaunayVoronoiDemo {
     pub fn show_all_circumcircles_mut(&mut self) -> &mut bool {
         &mut self.show_all_circumcircles
     }
+    pub fn show_power_mut(&mut self) -> &mut bool {
+        &mut self.show_power
+    }
+    pub fn randomize_weights(&mut self) {
+        let n = self.editor.len();
+        if self.weights.len() != n {
+            self.weights = vec![0.0; n];
+        }
+        for w in &mut self.weights {
+            self.weight_seed ^= self.weight_seed << 13;
+            self.weight_seed ^= self.weight_seed >> 7;
+            self.weight_seed ^= self.weight_seed << 17;
+            // Map to roughly [-300, 300] px² — visible without dominating.
+            let r = (self.weight_seed as f32 / u64::MAX as f32) - 0.5;
+            *w = r * 600.0;
+        }
+    }
+    pub fn reset_weights(&mut self) {
+        for w in &mut self.weights {
+            *w = 0.0;
+        }
+    }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let frame = self.editor.run(ui);
         self.last_rect = Some(frame.rect);
         canvas::paint_grid(&frame.painter, frame.rect);
+
+        // Sync weights vector to the current point count. PointEditor mutates
+        // independently (add / drag / right-click delete), so we reconcile each
+        // frame: extend with 0.0 for new points, truncate to drop deleted ones.
+        let n_pts = self.editor.len();
+        if self.weights.len() < n_pts {
+            self.weights.resize(n_pts, 0.0);
+        } else if self.weights.len() > n_pts {
+            self.weights.truncate(n_pts);
+        }
+
+        // Scroll-wheel weight editing: gated by hover over the canvas + presence
+        // of a site under the cursor, so it never steals page scroll on wasm.
+        if self.show_power && frame.response.hovered() {
+            let scroll = ui.input(|i| i.raw_scroll_delta.y);
+            if scroll != 0.0 {
+                if let Some(pos) = frame.response.hover_pos() {
+                    if let Some(idx) = self.editor.nearest_within(pos, HIT_RADIUS) {
+                        let w = (self.weights[idx] + scroll * WEIGHT_PER_SCROLL)
+                            .clamp(-WEIGHT_CLAMP, WEIGHT_CLAMP);
+                        self.weights[idx] = w;
+                        ui.ctx().request_repaint();
+                    }
+                }
+            }
+        }
 
         if self.editor.len() < 3 {
             canvas::paint_empty_state(
@@ -168,7 +227,11 @@ impl DelaunayVoronoiDemo {
         let hover_vertex = hover.and_then(|h| nearest_vertex(t, h, 14.0));
 
         let ctx = ui.ctx();
-        let voronoi_a = ctx.animate_bool(egui::Id::new("dv_show_voronoi"), self.show_voronoi);
+        // Voronoi cells and power cells are mutually exclusive: turning power on
+        // suppresses the standard Voronoi-cell layer (their fills would compete).
+        let voronoi_effective = self.show_voronoi && !self.show_power;
+        let voronoi_a = ctx.animate_bool(egui::Id::new("dv_show_voronoi"), voronoi_effective);
+        let power_a = ctx.animate_bool(egui::Id::new("dv_show_power"), self.show_power);
         let delaunay_a = ctx.animate_bool(egui::Id::new("dv_show_delaunay"), self.show_delaunay);
         let circle_a = ctx.animate_bool(egui::Id::new("dv_show_circumcircle"), self.show_circumcircle);
         let all_circles_a = ctx.animate_bool(
@@ -179,6 +242,15 @@ impl DelaunayVoronoiDemo {
         if voronoi_a > 0.01 {
             paint_voronoi_cells(&frame.painter, t, viewport, voronoi_a);
             paint_voronoi_edges(&frame.painter, t, viewport, voronoi_a);
+        }
+        if power_a > 0.01 {
+            paint_power_cells(
+                &frame.painter,
+                self.editor.points(),
+                &self.weights,
+                viewport,
+                power_a,
+            );
         }
         if all_circles_a > 0.01 {
             paint_all_circumcircles(&frame.painter, t, viewport, all_circles_a);
@@ -194,6 +266,10 @@ impl DelaunayVoronoiDemo {
             if circle_a > 0.01 {
                 paint_incident_circumcircles(&frame.painter, t, v, viewport, circle_a);
             }
+        }
+
+        if self.show_power {
+            paint_weight_indicators(&frame.painter, self.editor.points(), &self.weights);
         }
 
         self.editor
@@ -610,6 +686,55 @@ fn clip_segment_to_poly(a: Pos2, b: Pos2, clip: &[Pos2]) -> Option<(Pos2, Pos2)>
         Pos2::new(a.x + dx * t0, a.y + dy * t0),
         Pos2::new(a.x + dx * t1, a.y + dy * t1),
     ))
+}
+
+/// Paint power-diagram cells (weighted Voronoi). Each cell is the intersection
+/// of n−1 halfplanes (radical axes) clipped to the viewport. Colours match the
+/// rotating Voronoi palette so toggling between the two views is visually
+/// continuous; sites with empty power cells (dominated by a neighbour) just
+/// emit nothing.
+fn paint_power_cells(
+    painter: &egui::Painter,
+    sites: &[Pos2],
+    weights: &[f32],
+    viewport: Rect,
+    alpha: f32,
+) {
+    let palette = cell_colors();
+    let edge_stroke = Stroke::new(1.25, theme::FG.linear_multiply(0.45 * alpha));
+    for i in 0..sites.len() {
+        let cell = compute_power_cell(i, sites, weights, viewport);
+        if cell.len() < 3 {
+            continue;
+        }
+        let fill = palette[i % palette.len()].linear_multiply(0.22 * alpha);
+        painter.add(egui::Shape::convex_polygon(cell.clone(), fill, Stroke::NONE));
+        // Each radical-axis edge gets drawn twice (once per neighbouring cell).
+        // Cheap at n ≤ 100 and avoids a separate edge-extraction pass.
+        for k in 0..cell.len() {
+            let a = cell[k];
+            let b = cell[(k + 1) % cell.len()];
+            painter.line_segment([a, b], edge_stroke);
+        }
+    }
+}
+
+/// Per-site weight indicator: a thin ring of radius √max(w, 0). Negative weights
+/// render a faint cross instead, signalling "shrunk" without competing with the
+/// site dot. Both visualisations stay below the site marker in z-order.
+fn paint_weight_indicators(painter: &egui::Painter, sites: &[Pos2], weights: &[f32]) {
+    let ring_stroke = Stroke::new(1.0, theme::ACCENT.linear_multiply(0.55));
+    let cross_stroke = Stroke::new(0.75, theme::FG_DIM.linear_multiply(0.7));
+    for (i, &p) in sites.iter().enumerate() {
+        let w = weights.get(i).copied().unwrap_or(0.0);
+        if w > 0.5 {
+            painter.circle_stroke(p, w.sqrt(), ring_stroke);
+        } else if w < -0.5 {
+            let r = 5.0_f32;
+            painter.line_segment([p + egui::vec2(-r, -r), p + egui::vec2(r, r)], cross_stroke);
+            painter.line_segment([p + egui::vec2(-r, r), p + egui::vec2(r, -r)], cross_stroke);
+        }
+    }
 }
 
 fn is_left(a: Pos2, b: Pos2, p: Pos2) -> bool {

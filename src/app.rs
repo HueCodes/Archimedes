@@ -181,7 +181,7 @@ fn top_bar(ctx: &egui::Context) {
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
-                        RichText::new("v0.1")
+                        RichText::new("v0.3")
                             .monospace()
                             .size(11.0)
                             .color(theme::FG_DIM),
@@ -623,6 +623,29 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
     ui.checkbox(demo.show_all_circumcircles_mut(), "Empty circumcircles (all)");
 
     ui.add_space(14.0);
+    section_header(ui, "POWER DIAGRAM");
+    ui.checkbox(demo.show_power_mut(), "Weighted (power) cells");
+    ui.label(
+        RichText::new("scroll over a site to grow / shrink its weight")
+            .size(11.0)
+            .color(theme::FG_DIM),
+    );
+    ui.label(
+        RichText::new("d²(p, sᵢ) − wᵢ ≤ d²(p, sⱼ) − wⱼ")
+            .monospace()
+            .size(10.5)
+            .color(theme::FG_DIM.linear_multiply(0.85)),
+    );
+    ui.horizontal(|ui| {
+        if ui.small_button("Randomize weights").clicked() {
+            demo.randomize_weights();
+        }
+        if ui.small_button("Reset weights").clicked() {
+            demo.reset_weights();
+        }
+    });
+
+    ui.add_space(14.0);
     section_header(ui, "FOCUS");
     if let Some(focus) = demo.focus() {
         metric_line(ui, "degree", &format!("{}", focus.degree));
@@ -648,6 +671,7 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
     section_header(ui, "REFERENCES");
     ui.label(RichText::new("Bowyer (1981) · Watson (1981)").size(12.0).color(theme::FG_DIM));
     ui.label(RichText::new("de Berg et al., §7 / §9").size(12.0).color(theme::FG_DIM));
+    ui.label(RichText::new("Aurenhammer (1987) — power diagrams").size(12.0).color(theme::FG_DIM));
 }
 
 fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
