@@ -628,11 +628,13 @@ mod tests {
 
     #[test]
     fn click_on_edge_inserts_vertex_at_projection() {
-        let mut demo = PolygonOpsDemo::default();
-        demo.a = rectangle(Pos2::new(100.0, 100.0), 100.0, 100.0);
+        let mut demo = PolygonOpsDemo {
+            a: rectangle(Pos2::new(100.0, 100.0), 100.0, 100.0),
+            ..PolygonOpsDemo::default()
+        };
         let before = demo.a.len();
-        // Click near the top edge (vertices 0 and 1 of the rectangle)
-        let edge_midpoint = Pos2::new(100.0, 50.0); // y=50 is top edge for 100x100 rect centered at (100,100)
+        // Click near the top edge (vertices 0 and 1 of the rectangle centered at 100,100)
+        let edge_midpoint = Pos2::new(100.0, 50.0);
         let hit = demo.nearest_edge(edge_midpoint);
         assert!(hit.is_some(), "midpoint of top edge should be within HIT_RADIUS");
         let (side, edge_idx, proj) = hit.unwrap();
