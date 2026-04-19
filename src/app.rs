@@ -504,6 +504,15 @@ fn hull_sidebar(ui: &mut egui::Ui, hull: &mut ConvexHullDemo) {
     metric_line(ui, "last frame", &format!("{ms:.2} ms"));
 
     ui.add_space(14.0);
+    section_header(ui, "DUALITY");
+    ui.checkbox(hull.show_duality_mut(), "Show dual plane");
+    ui.label(
+        RichText::new("(a, b) ↔ line y = a·x + b · upper hull ≡ upper envelope")
+            .size(11.0)
+            .color(theme::FG_DIM),
+    );
+
+    ui.add_space(14.0);
     section_header(ui, "ANIMATION");
     let progress = hull.anim_progress();
     let (step, total, playing) = progress.unwrap_or((0, 0, false));

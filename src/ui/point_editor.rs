@@ -118,14 +118,27 @@ impl PointEditor {
     /// gets the warning accent so drag affordance is obvious.
     pub fn paint(&self, painter: &egui::Painter, base: Color32, hover: Option<Pos2>) {
         let hover_idx = hover.and_then(|h| self.nearest_within(h, HIT_RADIUS));
+        self.paint_with_focus(painter, base, hover_idx);
+    }
+
+    /// Paint variant that takes an explicit focused index (instead of deriving
+    /// it from a hover position). Used when the focused point is determined
+    /// outside this widget — e.g., duality view cross-highlighting, where the
+    /// cursor may be in a different pane than the one this editor draws.
+    pub fn paint_with_focus(
+        &self,
+        painter: &egui::Painter,
+        base: Color32,
+        focus: Option<usize>,
+    ) {
         for (i, &p) in self.points.iter().enumerate() {
-            let highlight = Some(i) == self.drag_idx || Some(i) == hover_idx;
+            let highlight = Some(i) == self.drag_idx || Some(i) == focus;
             let color = if highlight { theme::WARN } else { base };
             canvas::paint_point(painter, p, color);
         }
     }
 
-    fn nearest_within(&self, pos: Pos2, radius: f32) -> Option<usize> {
+    pub fn nearest_within(&self, pos: Pos2, radius: f32) -> Option<usize> {
         let r2 = radius * radius;
         let mut best: Option<(usize, f32)> = None;
         for (i, &p) in self.points.iter().enumerate() {
