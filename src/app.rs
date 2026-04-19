@@ -447,6 +447,16 @@ fn right_panel(
 }
 
 fn hull_sidebar(ui: &mut egui::Ui, hull: &mut ConvexHullDemo) {
+    section_header(ui, "EXPLAINER");
+    ui.label(
+        RichText::new(
+            "The smallest convex polygon containing every point. Andrew's monotone chain sorts by x then sweeps the list twice — lower then upper — popping any point that would make the chain turn right. O(n log n) is dominated by the sort; the sweep itself is linear.",
+        )
+        .size(13.0)
+        .color(theme::FG.linear_multiply(0.9)),
+    );
+
+    ui.add_space(14.0);
     section_header(ui, "ALGORITHM");
     ui.label(RichText::new("Andrew's monotone chain").size(15.0).color(theme::FG));
     ui.label(
@@ -454,6 +464,19 @@ fn hull_sidebar(ui: &mut egui::Ui, hull: &mut ConvexHullDemo) {
             .monospace()
             .size(12.0)
             .color(theme::ACCENT),
+    );
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new("orient(a,b,c) = (b.x−a.x)(c.y−a.y) − (b.y−a.y)(c.x−a.x)")
+            .monospace()
+            .size(10.5)
+            .color(theme::FG_DIM),
+    );
+    ui.label(
+        RichText::new("> 0 left · < 0 right · = 0 collinear")
+            .monospace()
+            .size(10.5)
+            .color(theme::FG_DIM.linear_multiply(0.8)),
     );
 
     ui.add_space(14.0);
@@ -526,6 +549,16 @@ fn hull_sidebar(ui: &mut egui::Ui, hull: &mut ConvexHullDemo) {
 }
 
 fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
+    section_header(ui, "EXPLAINER");
+    ui.label(
+        RichText::new(
+            "Two views of the same structure. Voronoi cells partition the plane by nearest site; Delaunay triangulates sites whose cells meet along an edge. Delaunay maximizes the minimum angle across all possible triangulations of the same points — the \"most balanced\" one.",
+        )
+        .size(13.0)
+        .color(theme::FG.linear_multiply(0.9)),
+    );
+
+    ui.add_space(14.0);
     section_header(ui, "ALGORITHM");
     ui.label(RichText::new("Bowyer-Watson (spade)").size(15.0).color(theme::FG));
     ui.label(
@@ -609,6 +642,16 @@ fn voronoi_sidebar(ui: &mut egui::Ui, demo: &mut DelaunayVoronoiDemo) {
 }
 
 fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
+    section_header(ui, "EXPLAINER");
+    ui.label(
+        RichText::new(
+            "Boolean set operations on simple polygons via a sweep-line over edge-intersection events. i_overlay is designed to survive the degenerate cases that crash naive implementations: shared edges, coincident vertices, nested contours, self-intersection.",
+        )
+        .size(13.0)
+        .color(theme::FG.linear_multiply(0.9)),
+    );
+
+    ui.add_space(14.0);
     section_header(ui, "ALGORITHM");
     ui.label(RichText::new("Overlay (i_overlay)").size(15.0).color(theme::FG));
     ui.label(
@@ -627,6 +670,13 @@ fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
         .size(12.5)
         .color(theme::FG.linear_multiply(0.85)),
     );
+
+    ui.add_space(14.0);
+    section_header(ui, "LEGEND");
+    swatch_line(ui, theme::ACCENT, "polygon A");
+    swatch_line(ui, theme::ORANGE, "polygon B");
+    swatch_line(ui, theme::OK, "result (outer contour)");
+    swatch_line_hole(ui, "result (hole)");
 
     ui.add_space(14.0);
     section_header(ui, "OPERATION");
@@ -725,6 +775,16 @@ fn polygon_ops_sidebar(ui: &mut egui::Ui, demo: &mut PolygonOpsDemo) {
 }
 
 fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
+    section_header(ui, "EXPLAINER");
+    ui.label(
+        RichText::new(
+            "VLSI yield modeling. A point defect of radius r causes a short between mask features A and B iff its center lies in the Minkowski intersection dilate(A, r/2) ∩ dilate(B, r/2). Integrating that area over a defect-size distribution gives the expected shorts per wafer.",
+        )
+        .size(13.0)
+        .color(theme::FG.linear_multiply(0.9)),
+    );
+
+    ui.add_space(14.0);
     section_header(ui, "ALGORITHM");
     ui.label(RichText::new("Critical-area via Minkowski dilation").size(15.0).color(theme::FG));
     ui.label(
@@ -732,6 +792,18 @@ fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
             .monospace()
             .size(12.0)
             .color(theme::ACCENT),
+    );
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new("E[shorts] = ∫ CA(r) · p(r) dr")
+            .monospace()
+            .size(10.5)
+            .color(theme::FG_DIM),
+    );
+    ui.label(
+        RichText::new("p(r) typically Rayleigh on particle-size data")
+            .size(10.5)
+            .color(theme::FG_DIM.linear_multiply(0.8)),
     );
 
     ui.add_space(14.0);
@@ -772,6 +844,16 @@ fn critical_area_sidebar(ui: &mut egui::Ui, demo: &mut CriticalAreaDemo) {
 }
 
 fn robustness_sidebar(ui: &mut egui::Ui, demo: &mut RobustnessDemo) {
+    section_header(ui, "EXPLAINER");
+    ui.label(
+        RichText::new(
+            "Naive f32 orient2d can silently return the wrong sign on near-collinear inputs: the subtraction of two near-equal products eats its significant bits. Every CG algorithm branches on this sign, so one silent flip corrupts the pipeline. Shewchuk's adaptive predicates promote to extended precision exactly when the error bound crosses zero.",
+        )
+        .size(13.0)
+        .color(theme::FG.linear_multiply(0.9)),
+    );
+
+    ui.add_space(14.0);
     section_header(ui, "ALGORITHM");
     ui.label(RichText::new("orient2d · naive f32 vs Shewchuk adaptive").size(15.0).color(theme::FG));
     ui.label(
@@ -819,6 +901,25 @@ fn robustness_sidebar(ui: &mut egui::Ui, demo: &mut RobustnessDemo) {
         "disagreements",
         &format!("{}", demo.disagreements()),
     );
+    metric_line(ui, "Shewchuk bound", &format!("{:+.4e}", r.shewchuk_bound));
+    let ratio = if r.shewchuk_bound > 0.0 {
+        r.naive.abs() / r.shewchuk_bound
+    } else {
+        f32::INFINITY
+    };
+    let ratio_color = if ratio < 1.0 {
+        theme::WARN
+    } else if ratio < 100.0 {
+        theme::ORANGE
+    } else {
+        theme::OK
+    };
+    ui.label(
+        RichText::new(format!("|naive| / bound = {ratio:.2e}"))
+            .monospace()
+            .size(11.0)
+            .color(ratio_color),
+    );
 
     ui.add_space(14.0);
     section_header(ui, "VIEW");
@@ -849,6 +950,40 @@ fn robustness_sidebar(ui: &mut egui::Ui, demo: &mut RobustnessDemo) {
             .size(12.0)
             .color(theme::FG_DIM),
     );
+}
+
+fn swatch_line(ui: &mut egui::Ui, color: egui::Color32, label: &str) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(14.0, 10.0), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 2.0, color.linear_multiply(0.22));
+        ui.painter().rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(1.25, color.linear_multiply(0.85)),
+        );
+        ui.label(
+            RichText::new(label)
+                .size(11.5)
+                .color(theme::FG.linear_multiply(0.85)),
+        );
+    });
+}
+
+fn swatch_line_hole(ui: &mut egui::Ui, label: &str) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(14.0, 10.0), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 2.0, theme::BG);
+        ui.painter().rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(1.0, theme::OK.linear_multiply(0.85)),
+        );
+        ui.label(
+            RichText::new(label)
+                .size(11.5)
+                .color(theme::FG.linear_multiply(0.85)),
+        );
+    });
 }
 
 fn section_header(ui: &mut egui::Ui, text: &str) {

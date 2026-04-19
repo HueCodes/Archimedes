@@ -30,6 +30,11 @@ pub struct Readout {
     pub sign_naive: i8,
     pub sign_robust: i8,
     pub agree: bool,
+    /// Shewchuk's static error bound for the naive f32 computation at the
+    /// current (a, b, c). If `|naive|` is below this bound, the sign is
+    /// formally untrustworthy. Reported so the reader can see the error
+    /// budget relative to the signal.
+    pub shewchuk_bound: f32,
 }
 
 impl Default for RobustnessDemo {
@@ -68,12 +73,17 @@ impl RobustnessDemo {
         let robust = orient2d_robust(self.a, self.b, self.c);
         let sign_naive = sign(naive as f64);
         let sign_robust = sign(robust);
+        let left = (self.b.x - self.a.x) * (self.c.y - self.a.y);
+        let right = (self.b.y - self.a.y) * (self.c.x - self.a.x);
+        let shewchuk_bound =
+            (3.0 + 16.0 * f32::EPSILON) * f32::EPSILON * (left.abs() + right.abs());
         Readout {
             naive,
             robust,
             sign_naive,
             sign_robust,
             agree: sign_naive == sign_robust,
+            shewchuk_bound,
         }
     }
 
