@@ -4,6 +4,7 @@ use eframe::egui::{self, Align2, FontId, Pos2, Rect, Stroke};
 use web_time::Instant;
 
 use crate::canvas;
+use crate::collab::presence::PresenceTracker;
 use crate::collab::wire::{
     decode_envelope, encode_envelope, envelope::Payload, DocUpdate, Envelope,
 };
@@ -36,6 +37,7 @@ pub struct ConvexHullDemo {
     /// the doc has beyond this is "unsent local ops we owe the server".
     last_sent_sv: Vec<u8>,
     last_send_at: Instant,
+    presence: PresenceTracker,
     seed: u64,
     orient_tests: usize,
     hull_len: usize,
@@ -66,6 +68,7 @@ impl ConvexHullDemo {
             ws,
             last_sent_sv,
             last_send_at: Instant::now(),
+            presence: PresenceTracker::new(),
             seed: INITIAL_SEED,
             orient_tests: 0,
             hull_len: 0,
@@ -121,8 +124,8 @@ impl ConvexHullDemo {
                     Ok(()) => applied_any = true,
                     Err(e) => log::warn!("apply remote update: {e}"),
                 },
-                Some(Payload::Presence(_)) => {
-                    // CP25/26 will render these.
+                Some(Payload::Presence(p)) => {
+                    self.presence.ingest(p);
                 }
                 Some(Payload::Hello(_)) | None => {}
             }
@@ -363,6 +366,20 @@ impl ConvexHullDemo {
         self.reconcile_editor_to_doc();
         // Send local + apply remote each frame so collab tracks input.
         self.collab_tick();
+        // Sample our cursor (normalized into the canvas) for presence;
+        // CP26 renders other clients' cursors.
+        let local_norm = frame.response.hover_pos().and_then(|c| {
+            if frame.rect.contains(c) && frame.rect.width() > 0.0 && frame.rect.height() > 0.0 {
+                Some(Pos2::new(
+                    (c.x - frame.rect.min.x) / frame.rect.width(),
+                    (c.y - frame.rect.min.y) / frame.rect.height(),
+                ))
+            } else {
+                None
+            }
+        });
+        self.presence.maybe_send(local_norm, &self.ws);
+        self.presence.prune();
         self.last_rect = Some(frame.rect);
 
         canvas::paint_grid(&frame.painter, frame.rect);

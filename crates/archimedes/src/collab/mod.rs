@@ -6,6 +6,7 @@
 //! and only sees opaque update bytes.
 
 pub mod doc;
+pub mod presence;
 pub mod wire;
 pub mod ws;
 
