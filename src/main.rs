@@ -2,6 +2,7 @@
 
 mod app;
 mod canvas;
+mod collab;
 mod demos;
 mod geometry;
 mod theme;
