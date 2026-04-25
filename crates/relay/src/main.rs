@@ -23,6 +23,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::broadcast;
+use prost::Message as _;
 use yrs::updates::decoder::Decode;
 use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
 
@@ -30,6 +31,8 @@ mod wire {
     #![allow(clippy::all)]
     include!(concat!(env!("OUT_DIR"), "/archimedes.v1.rs"));
 }
+
+use wire::{envelope::Payload, DocUpdate, Envelope};
 
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_ROOM: &str = "default";
@@ -116,10 +119,17 @@ async fn handle_socket(socket: WebSocket, room_name: String, rooms: Rooms) {
     let (mut sink, mut stream) = socket.split();
 
     // Send the room snapshot first so the new client converges to current
-    // state without needing any prior sync handshake. An empty doc encodes
-    // to a tiny no-op update; the client applies it idempotently.
+    // state without needing any prior sync handshake. Wrapped in an
+    // Envelope::DocUpdate so the client decodes it exactly like any
+    // other relayed update.
     let snapshot = encode_room_state(&room.doc);
-    if sink.send(Message::Binary(snapshot)).await.is_err() {
+    let snapshot_env = Envelope {
+        payload: Some(Payload::Update(DocUpdate {
+            yrs_update: snapshot,
+        })),
+    };
+    let snapshot_bytes = snapshot_env.encode_to_vec();
+    if sink.send(Message::Binary(snapshot_bytes)).await.is_err() {
         tracing::debug!(room = %room_name, "client dropped before snapshot");
         return;
     }
@@ -133,7 +143,7 @@ async fn handle_socket(socket: WebSocket, room_name: String, rooms: Rooms) {
         }
     });
 
-    // Inbound: this client → apply to room doc → broadcast to subscribers.
+    // Inbound: this client → decode Envelope → route by payload type.
     let room_for_recv = room.clone();
     let room_name_for_recv = room_name.clone();
     let mut recv_task = tokio::spawn(async move {
@@ -144,13 +154,34 @@ async fn handle_socket(socket: WebSocket, room_name: String, rooms: Rooms) {
                 Message::Close(_) => break,
                 _ => continue,
             };
-            match apply_update_to_doc(&room_for_recv.doc, &bytes) {
-                Ok(()) => {
+            let env = match Envelope::decode(&bytes[..]) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(room = %room_name_for_recv, "dropping malformed envelope: {e}");
+                    continue;
+                }
+            };
+            match env.payload {
+                Some(Payload::Update(ref u)) => {
+                    if let Err(e) = apply_update_to_doc(&room_for_recv.doc, &u.yrs_update) {
+                        tracing::warn!(room = %room_name_for_recv, "dropping malformed yrs update: {e}");
+                        continue;
+                    }
                     let _ = room_for_recv.sender.send(bytes);
                 }
-                Err(e) => {
-                    tracing::warn!(room = %room_name_for_recv, "dropping malformed update: {e}");
+                Some(Payload::Presence(_)) => {
+                    // Ephemeral; not stored, just relayed.
+                    let _ = room_for_recv.sender.send(bytes);
                 }
+                Some(Payload::Hello(ref h)) => {
+                    tracing::debug!(
+                        room = %room_name_for_recv,
+                        client = %h.client_id,
+                        version = h.protocol_version,
+                        "client hello"
+                    );
+                }
+                None => {}
             }
         }
     });
@@ -246,7 +277,7 @@ mod tests {
         }
     }
 
-    /// Build an opaque update by inserting a single i64 into a fresh yrs doc.
+    /// Build an Envelope::DocUpdate that inserts a single i64.
     fn make_update_with(key: &str, value: i64) -> Vec<u8> {
         let doc = Doc::new();
         let map = doc.get_or_insert_map("test");
@@ -255,12 +286,22 @@ mod tests {
             map.insert(&mut txn, key.to_string(), value);
         }
         let txn = doc.transact();
-        txn.encode_state_as_update_v1(&StateVector::default())
+        let yrs = txn.encode_state_as_update_v1(&StateVector::default());
+        Envelope {
+            payload: Some(Payload::Update(DocUpdate { yrs_update: yrs })),
+        }
+        .encode_to_vec()
     }
 
-    fn doc_from_update(bytes: &[u8]) -> Doc {
+    /// Decode an Envelope::DocUpdate and apply its yrs payload to a fresh doc.
+    fn doc_from_envelope(bytes: &[u8]) -> Doc {
+        let env = Envelope::decode(bytes).expect("envelope decode");
+        let yrs = match env.payload {
+            Some(Payload::Update(u)) => u.yrs_update,
+            other => panic!("expected DocUpdate, got {other:?}"),
+        };
         let doc = Doc::new();
-        let update = Update::decode_v1(bytes).expect("decode");
+        let update = Update::decode_v1(&yrs).expect("yrs decode");
         {
             let mut txn = doc.transact_mut();
             txn.apply_update(update).expect("apply");
@@ -284,7 +325,7 @@ mod tests {
         // Sanity: our test-helper construction can be decoded back to the
         // same value. If this fails the network tests are red-herrings.
         let bytes = make_update_with("k", 42);
-        let doc = doc_from_update(&bytes);
+        let doc = doc_from_envelope(&bytes);
         assert_eq!(read_test_value(&doc, "k"), Some(42));
     }
 
@@ -309,7 +350,7 @@ mod tests {
         .await
         .expect("timeout waiting for broadcast");
 
-        let doc = doc_from_update(&received);
+        let doc = doc_from_envelope(&received);
         assert_eq!(read_test_value(&doc, "k"), Some(42));
     }
 
@@ -344,7 +385,7 @@ mod tests {
         // B joins late; first frame should already include A's change.
         let mut b = connect(addr, "history").await;
         let snapshot = drain_snapshot(&mut b).await;
-        let doc = doc_from_update(&snapshot);
+        let doc = doc_from_envelope(&snapshot);
         assert_eq!(
             read_test_value(&doc, "first"),
             Some(7),

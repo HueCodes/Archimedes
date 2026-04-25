@@ -4,6 +4,9 @@ use eframe::egui::{self, Align2, FontId, Pos2, Rect, Stroke};
 use web_time::Instant;
 
 use crate::canvas;
+use crate::collab::wire::{
+    decode_envelope, encode_envelope, envelope::Payload, DocUpdate, Envelope,
+};
 use crate::collab::{CollabDoc, PointId, WsClient, WsStatus};
 use crate::geometry::primitives::orient2d_naive;
 use crate::theme;
@@ -90,8 +93,13 @@ impl ConvexHullDemo {
         if elapsed >= SEND_THROTTLE_MS {
             let current_sv = self.doc.state_vector();
             if current_sv != self.last_sent_sv {
-                if let Ok(diff) = self.doc.encode_diff(&self.last_sent_sv) {
-                    self.ws.send(diff);
+                if let Ok(yrs_diff) = self.doc.encode_diff(&self.last_sent_sv) {
+                    let env = Envelope {
+                        payload: Some(Payload::Update(DocUpdate {
+                            yrs_update: yrs_diff,
+                        })),
+                    };
+                    self.ws.send(encode_envelope(&env));
                     self.last_sent_sv = current_sv;
                     self.last_send_at = now;
                 }
@@ -101,9 +109,22 @@ impl ConvexHullDemo {
         // Apply incoming.
         let mut applied_any = false;
         for bytes in self.ws.drain_inbound() {
-            match self.doc.apply_remote_update(&bytes) {
-                Ok(()) => applied_any = true,
-                Err(e) => log::warn!("apply remote update: {e}"),
+            let env = match decode_envelope(&bytes) {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!("decode envelope: {e}");
+                    continue;
+                }
+            };
+            match env.payload {
+                Some(Payload::Update(u)) => match self.doc.apply_remote_update(&u.yrs_update) {
+                    Ok(()) => applied_any = true,
+                    Err(e) => log::warn!("apply remote update: {e}"),
+                },
+                Some(Payload::Presence(_)) => {
+                    // CP25/26 will render these.
+                }
+                Some(Payload::Hello(_)) | None => {}
             }
         }
         if applied_any {
