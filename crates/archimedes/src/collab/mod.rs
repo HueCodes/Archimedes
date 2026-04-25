@@ -6,8 +6,11 @@
 //! and only sees opaque update bytes.
 
 pub mod doc;
+pub mod ws;
 
 // CP14 wires these into the convex_hull tab; until then the binary doesn't
 // reference them, but tests in `doc.rs` and downstream CPs will.
 #[allow(unused_imports)]
 pub use doc::{CollabDoc, CollabError, CollabPoint, PointId};
+#[allow(unused_imports)]
+pub use ws::{ws_url_from_query, WsClient, WsStatus};
