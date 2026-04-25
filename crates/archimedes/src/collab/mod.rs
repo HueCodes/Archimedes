@@ -6,6 +6,7 @@
 //! and only sees opaque update bytes.
 
 pub mod doc;
+pub mod wire;
 pub mod ws;
 
 // CP14 wires these into the convex_hull tab; until then the binary doesn't

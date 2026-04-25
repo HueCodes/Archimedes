@@ -26,6 +26,11 @@ use tokio::sync::broadcast;
 use yrs::updates::decoder::Decode;
 use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
 
+mod wire {
+    #![allow(clippy::all)]
+    include!(concat!(env!("OUT_DIR"), "/archimedes.v1.rs"));
+}
+
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_ROOM: &str = "default";
 /// Per-room broadcast queue depth. Beyond this, slow subscribers

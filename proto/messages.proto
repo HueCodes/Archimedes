@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+// Wire format for Archimedes collab. Used between client (WASM) and
+// relay over WebSocket (or BroadcastChannel between same-origin tabs).
+//
+// Schema evolution rules:
+//  - Never reuse a field number.
+//  - Never change a field's wire type.
+//  - To remove a field: leave the number reserved; document in the
+//    field's comment.
+//  - To extend the oneof, append a new variant. Old clients ignore
+//    unknown variants; old relays ignore unknown payload tags.
+//  - protocol_version is bumped only on breaking changes that older
+//    clients couldn't safely ignore (e.g., a doc-encoding swap).
+package archimedes.v1;
+
+// First message a client sends after connecting. Lets the relay log
+// who joined and reject incompatible protocol versions if we ever
+// need to. Not load-bearing today.
+message ClientHello {
+  string room = 1;
+  string client_id = 2;
+  uint32 protocol_version = 3;
+}
+
+// Opaque yrs CRDT update. Apply with Update::decode_v1 + apply_update.
+message DocUpdate {
+  bytes yrs_update = 1;
+}
+
+// Ephemeral cursor position for presence rendering. The relay does
+// not store these; it just fans them out to the room.
+message Presence {
+  string client_id = 1;
+  // Canvas-space coordinates in pixels of the source client's viewport.
+  float x = 2;
+  float y = 3;
+  // Color packed as 0xRRGGBB.
+  uint32 color = 4;
+  // Wall-clock millis since UNIX epoch when the cursor was sampled.
+  uint64 ts_ms = 5;
+}
+
+message Envelope {
+  oneof payload {
+    ClientHello hello = 1;
+    DocUpdate update = 2;
+    Presence presence = 3;
+  }
+}
