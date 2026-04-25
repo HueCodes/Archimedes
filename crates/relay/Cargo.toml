@@ -7,3 +7,12 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "signal"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
