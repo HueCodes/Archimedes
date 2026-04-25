@@ -4,6 +4,7 @@ use eframe::egui::{self, Align2, FontId, Pos2, Rect, Stroke};
 use web_time::Instant;
 
 use crate::canvas;
+use crate::collab::{CollabDoc, PointId};
 use crate::geometry::primitives::orient2d_naive;
 use crate::theme;
 use crate::ui::point_editor::{next_seed, seeded_points, PointEditor, HIT_RADIUS};
@@ -13,6 +14,15 @@ const DEFAULT_INTERVAL_MS: u64 = 120;
 
 pub struct ConvexHullDemo {
     editor: PointEditor,
+    /// CRDT-backed authoritative point set. Local mutations through
+    /// `editor` are mirrored here each frame; remote updates (CP19+)
+    /// flow back into `editor` via `sync_editor_from_doc`.
+    doc: CollabDoc,
+    /// Stable point ids, parallel to `editor.points()`.
+    ids: Vec<PointId>,
+    /// Snapshot of `editor.points()` at the start of the previous frame —
+    /// reconciled against the post-`run` state to detect adds / drags / deletes.
+    last_snapshot: Vec<Pos2>,
     seed: u64,
     orient_tests: usize,
     hull_len: usize,
@@ -29,6 +39,9 @@ impl Default for ConvexHullDemo {
     fn default() -> Self {
         Self {
             editor: PointEditor::default(),
+            doc: CollabDoc::new(),
+            ids: Vec::new(),
+            last_snapshot: Vec::new(),
             seed: INITIAL_SEED,
             orient_tests: 0,
             hull_len: 0,
@@ -99,6 +112,9 @@ impl ConvexHullDemo {
 
     pub fn clear(&mut self) {
         self.editor.clear();
+        self.doc.clear();
+        self.ids.clear();
+        self.last_snapshot.clear();
         self.hull_len = 0;
         self.orient_tests = 0;
         self.last_ms = 0.0;
@@ -107,10 +123,77 @@ impl ConvexHullDemo {
 
     pub fn random_into_last_rect(&mut self, n: usize) {
         if let Some(r) = self.last_rect {
-            self.editor.set(seeded_points(r, n, self.seed));
+            let pts = seeded_points(r, n, self.seed);
+            self.doc.clear();
+            self.ids.clear();
+            for p in &pts {
+                let id = self.doc.insert_point(p.x as f64, p.y as f64);
+                self.ids.push(id);
+            }
+            self.sync_editor_from_doc();
             self.seed = next_seed(self.seed);
             self.anim = None;
         }
+    }
+
+    /// Pull the doc's point set into the editor and rebuild `ids`. Used after
+    /// bulk mutations (random fill, future remote-snapshot apply) so the
+    /// editor's positional Vec matches the doc's authoritative state.
+    fn sync_editor_from_doc(&mut self) {
+        let pts = self.doc.points();
+        self.ids = pts.iter().map(|p| p.id.clone()).collect();
+        let editor_pts: Vec<Pos2> = pts
+            .iter()
+            .map(|p| Pos2::new(p.x as f32, p.y as f32))
+            .collect();
+        self.editor.set(editor_pts.clone());
+        self.last_snapshot = editor_pts;
+    }
+
+    /// Diff `editor.points()` against `last_snapshot` and apply the deltas
+    /// to the doc + `ids`. Assumes single-mutation-per-frame semantics
+    /// (PointEditor pushes to end on click, removes one index on right-click,
+    /// updates one index on drag).
+    fn reconcile_editor_to_doc(&mut self) {
+        let curr: Vec<Pos2> = self.editor.points().to_vec();
+        for op in reconcile_ops(&self.last_snapshot, &curr) {
+            match op {
+                ReconcileOp::Add(p) => {
+                    let id = self.doc.insert_point(p.x as f64, p.y as f64);
+                    self.ids.push(id);
+                }
+                ReconcileOp::Remove(idx) => {
+                    if idx < self.ids.len() {
+                        let id = self.ids.remove(idx);
+                        self.doc.delete_point(&id);
+                    }
+                }
+                ReconcileOp::Move(idx, p) => {
+                    if let Some(id) = self.ids.get(idx) {
+                        self.doc.move_point(id, p.x as f64, p.y as f64);
+                    }
+                }
+                ReconcileOp::BulkReplace => {
+                    self.doc.clear();
+                    self.ids.clear();
+                    for p in &curr {
+                        let id = self.doc.insert_point(p.x as f64, p.y as f64);
+                        self.ids.push(id);
+                    }
+                }
+            }
+        }
+        self.last_snapshot = curr;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn doc_for_test(&self) -> &CollabDoc {
+        &self.doc
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ids_for_test(&self) -> &[PointId] {
+        &self.ids
     }
 
     pub fn toggle_play(&mut self) {
@@ -191,6 +274,9 @@ impl ConvexHullDemo {
 
     fn ui_primal(&mut self, ui: &mut egui::Ui, override_focus: Option<usize>) {
         let frame = self.editor.run(ui);
+        // Reconcile BEFORE the empty-state early return: a right-click that
+        // removes the last point would otherwise leave the doc stale.
+        self.reconcile_editor_to_doc();
         self.last_rect = Some(frame.rect);
 
         canvas::paint_grid(&frame.painter, frame.rect);
@@ -438,6 +524,53 @@ fn nearest_dual_line(cursor: Pos2, points: &[Pos2], rect: Rect) -> Option<usize>
     best.map(|(i, _)| i)
 }
 
+/// Operation needed to bring the doc in sync with a new editor snapshot.
+/// Single-mutation cases (Add at end, Remove one index, Move one index)
+/// cover the PointEditor's per-frame behavior; BulkReplace catches anything
+/// else (e.g., set() called from outside the normal flow).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ReconcileOp {
+    Add(Pos2),
+    Remove(usize),
+    Move(usize, Pos2),
+    BulkReplace,
+}
+
+fn reconcile_ops(prev: &[Pos2], curr: &[Pos2]) -> Vec<ReconcileOp> {
+    if prev.len() == curr.len() {
+        // Drag: at most one index changed in the typical case.
+        let diffs: Vec<usize> = (0..curr.len())
+            .filter(|&i| prev[i] != curr[i])
+            .collect();
+        return match diffs.len() {
+            0 => Vec::new(),
+            1 => vec![ReconcileOp::Move(diffs[0], curr[diffs[0]])],
+            _ => vec![ReconcileOp::BulkReplace],
+        };
+    }
+    if curr.len() == prev.len() + 1 {
+        // PointEditor pushes new points to the end on click.
+        if prev[..] == curr[..prev.len()] {
+            return vec![ReconcileOp::Add(curr[prev.len()])];
+        }
+        return vec![ReconcileOp::BulkReplace];
+    }
+    if curr.len() + 1 == prev.len() {
+        // PointEditor removes one index on right-click; subsequent points shift.
+        for i in 0..curr.len() {
+            if prev[i] != curr[i] {
+                if prev[i + 1..] == curr[i..] {
+                    return vec![ReconcileOp::Remove(i)];
+                }
+                return vec![ReconcileOp::BulkReplace];
+            }
+        }
+        // Diverged at the tail.
+        return vec![ReconcileOp::Remove(prev.len() - 1)];
+    }
+    vec![ReconcileOp::BulkReplace]
+}
+
 fn paint_partial_polyline(painter: &egui::Painter, pts: &[Pos2]) {
     if pts.len() < 2 {
         return;
@@ -647,6 +780,115 @@ mod tests {
         ];
         let (hull, _) = monotone_chain(&pts);
         assert_eq!(hull.len(), 4);
+    }
+
+    // --- reconcile_ops: pure-function tests ---
+
+    #[test]
+    fn reconcile_no_change() {
+        let p = vec![Pos2::new(1.0, 1.0), Pos2::new(2.0, 2.0)];
+        assert_eq!(reconcile_ops(&p, &p), Vec::<ReconcileOp>::new());
+    }
+
+    #[test]
+    fn reconcile_add_at_end() {
+        let prev = vec![Pos2::new(0.0, 0.0)];
+        let curr = vec![Pos2::new(0.0, 0.0), Pos2::new(5.0, 5.0)];
+        assert_eq!(
+            reconcile_ops(&prev, &curr),
+            vec![ReconcileOp::Add(Pos2::new(5.0, 5.0))]
+        );
+    }
+
+    #[test]
+    fn reconcile_remove_middle() {
+        let prev = vec![
+            Pos2::new(1.0, 1.0),
+            Pos2::new(2.0, 2.0),
+            Pos2::new(3.0, 3.0),
+        ];
+        let curr = vec![Pos2::new(1.0, 1.0), Pos2::new(3.0, 3.0)];
+        assert_eq!(reconcile_ops(&prev, &curr), vec![ReconcileOp::Remove(1)]);
+    }
+
+    #[test]
+    fn reconcile_remove_last() {
+        let prev = vec![Pos2::new(1.0, 1.0), Pos2::new(2.0, 2.0)];
+        let curr = vec![Pos2::new(1.0, 1.0)];
+        assert_eq!(reconcile_ops(&prev, &curr), vec![ReconcileOp::Remove(1)]);
+    }
+
+    #[test]
+    fn reconcile_remove_only_point() {
+        let prev = vec![Pos2::new(1.0, 1.0)];
+        let curr: Vec<Pos2> = Vec::new();
+        assert_eq!(reconcile_ops(&prev, &curr), vec![ReconcileOp::Remove(0)]);
+    }
+
+    #[test]
+    fn reconcile_drag_one_point() {
+        let prev = vec![Pos2::new(1.0, 1.0), Pos2::new(2.0, 2.0)];
+        let curr = vec![Pos2::new(1.0, 1.0), Pos2::new(9.0, 9.0)];
+        assert_eq!(
+            reconcile_ops(&prev, &curr),
+            vec![ReconcileOp::Move(1, Pos2::new(9.0, 9.0))]
+        );
+    }
+
+    #[test]
+    fn reconcile_bulk_when_multiple_positions_change() {
+        let prev = vec![Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)];
+        let curr = vec![Pos2::new(5.0, 5.0), Pos2::new(6.0, 6.0)];
+        assert_eq!(reconcile_ops(&prev, &curr), vec![ReconcileOp::BulkReplace]);
+    }
+
+    #[test]
+    fn reconcile_bulk_when_size_jumps_by_more_than_one() {
+        let prev = vec![Pos2::new(0.0, 0.0)];
+        let curr = vec![
+            Pos2::new(0.0, 0.0),
+            Pos2::new(1.0, 1.0),
+            Pos2::new(2.0, 2.0),
+        ];
+        assert_eq!(reconcile_ops(&prev, &curr), vec![ReconcileOp::BulkReplace]);
+    }
+
+    // --- ConvexHullDemo doc mirror ---
+
+    #[test]
+    fn random_fill_populates_doc_and_ids() {
+        let mut demo = ConvexHullDemo::default();
+        demo.last_rect = Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)));
+        demo.random_into_last_rect(50);
+        assert_eq!(demo.doc_for_test().len(), 50);
+        assert_eq!(demo.ids_for_test().len(), 50);
+    }
+
+    #[test]
+    fn clear_empties_doc() {
+        let mut demo = ConvexHullDemo::default();
+        demo.last_rect = Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)));
+        demo.random_into_last_rect(20);
+        assert_eq!(demo.doc_for_test().len(), 20);
+        demo.clear();
+        assert_eq!(demo.doc_for_test().len(), 0);
+        assert!(demo.ids_for_test().is_empty());
+    }
+
+    #[test]
+    fn random_fill_doc_state_round_trips_to_fresh_peer() {
+        // Proves the doc's state — populated through the demo's path —
+        // can be replicated verbatim. This is what CP19 will rely on
+        // when a new tab joins mid-session.
+        let mut demo = ConvexHullDemo::default();
+        demo.last_rect = Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)));
+        demo.random_into_last_rect(10);
+
+        let snapshot = demo.doc_for_test().encode_state();
+        let peer = CollabDoc::new();
+        peer.apply_remote_update(&snapshot).unwrap();
+
+        assert_eq!(demo.doc_for_test().points(), peer.points());
     }
 
     #[test]
