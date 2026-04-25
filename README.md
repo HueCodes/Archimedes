@@ -21,6 +21,56 @@ via WebGPU through [`egui`](https://github.com/emilk/egui).
 
 Screenshots: [Delaunay / Voronoi](docs/screenshots/delaunay-voronoi.png) · [Polygon Ops](docs/screenshots/polygon-ops.png) · [Critical Area](docs/screenshots/critical-area.png) · [Robustness](docs/screenshots/robustness.png)
 
+## Real-time collaboration
+
+The Convex Hull tab is a CRDT-backed shared document. Two browser tabs pointed at the
+same room see each other's edits sub-100ms — drag a point in tab A, the hull updates
+in tab B. The convergence is conflict-free (yrs / Yjs port), the wire format is
+versioned Protobuf, and a tab joining mid-session converges from a server snapshot
+without a sync handshake.
+
+```sh
+# Run the relay server locally:
+cargo run -p relay
+# In two browser tabs:
+trunk serve  # in crates/archimedes
+# → http://127.0.0.1:8080/?ws=ws://127.0.0.1:8787/ws&room=demo
+```
+
+### Wire format
+
+`proto/messages.proto`:
+
+```proto
+syntax = "proto3";
+package archimedes.v1;
+
+message ClientHello { string room = 1; string client_id = 2; uint32 protocol_version = 3; }
+message DocUpdate   { bytes yrs_update = 1; }
+message Presence    { string client_id = 1; float x = 2; float y = 3; uint32 color = 4; uint64 ts_ms = 5; }
+message Envelope    { oneof payload { ClientHello hello = 1; DocUpdate update = 2; Presence presence = 3; } }
+```
+
+### Schema evolution
+
+- Field numbers are forever — never reuse, never re-type, mark removed fields
+  reserved.
+- Adding a new oneof variant (e.g., `EditCursor`, `Selection`) is non-breaking:
+  old clients ignore unknown variants, old relays log and drop them.
+- `protocol_version` is reserved for changes that can't be made non-breaking
+  (e.g., a doc-encoding swap from yrs v1 to v2). The relay can refuse a hello
+  with an incompatible major.
+
+### Known shortcuts
+
+- The relay broadcasts every relayed update back to the originator; the
+  client tolerates the echo because yrs `apply_update` is idempotent for
+  already-applied operations. A future `Envelope.client_id` field would
+  let receivers skip self-traffic to save bandwidth.
+- The y-sync protocol (sync step 1 / step 2) is skipped — joining clients
+  receive the full state snapshot in their first frame instead.
+- Rooms are in-memory only; a relay restart loses room state.
+
 ## Why "Archimedes"
 
 Archimedes approximated π by exhausting inscribed and circumscribed polygons —
@@ -33,6 +83,10 @@ the same orientation-test machinery that drives the convex-hull tab in the limit
 - [`spade`](https://crates.io/crates/spade) — Delaunay / Voronoi (incremental Bowyer-Watson)
 - [`i_overlay`](https://crates.io/crates/i_overlay) — polygon boolean operations
 - [`robust`](https://crates.io/crates/robust) — Shewchuk adaptive-precision predicates
+- [`yrs`](https://crates.io/crates/yrs) — Yjs CRDT, Rust port — backs the shared doc
+- [`axum`](https://crates.io/crates/axum) + [`tokio-tungstenite`](https://crates.io/crates/tokio-tungstenite) — relay server
+- [`prost`](https://crates.io/crates/prost) + [`protox`](https://crates.io/crates/protox) — Protobuf wire format, pure-Rust schema compile (no `protoc` needed)
+- [`gloo-net`](https://crates.io/crates/gloo-net) — WebSocket client in WASM
 - [`web-time`](https://crates.io/crates/web-time) — monotonic clocks that compile on both native and `wasm32`
 
 ## Build
@@ -41,22 +95,27 @@ the same orientation-test machinery that drives the convex-hull tab in the limit
 cargo install trunk
 rustup target add wasm32-unknown-unknown
 
-# dev server, no auto-reload
+# wasm dev server, no auto-reload
+cd crates/archimedes
 trunk serve --port 8080 --no-autoreload
 # → http://127.0.0.1:8080/Archimedes/
 
-# release build for deploy
+# release build for deploy (from crates/archimedes/)
 trunk build --release --public-url /Archimedes/
 
-# native desktop build (same source)
-cargo run --release
+# native desktop build (same source, single-user — no collab)
+cargo run -p archimedes --release
+
+# relay server for cross-device collab
+cargo run -p relay
 ```
 
 ## Algorithms implemented from scratch
 
-- Andrew's monotone chain convex hull (`src/demos/convex_hull.rs`)
-- 2D orientation predicate, naive `f32` and Shewchuk-robust variants (`src/geometry/primitives.rs`)
-- Minkowski-style critical-area dilation via offset + intersection (`src/demos/critical_area.rs`)
+- Andrew's monotone chain convex hull (`crates/archimedes/src/demos/convex_hull.rs`)
+- 2D orientation predicate, naive `f32` and Shewchuk-robust variants (`crates/archimedes/src/geometry/primitives.rs`)
+- Minkowski-style critical-area dilation via offset + intersection (`crates/archimedes/src/demos/critical_area.rs`)
+- Reconciliation diff that mirrors per-frame `PointEditor` mutations into the CRDT (`crates/archimedes/src/demos/convex_hull.rs`, `reconcile_ops`)
 
 ## References
 
