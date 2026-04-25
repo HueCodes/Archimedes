@@ -24,10 +24,11 @@ jobs:
         run: cargo install --locked trunk
 
       - name: Build
+        working-directory: crates/archimedes
         run: trunk build --release --public-url /Archimedes/
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
+          publish_dir: ./crates/archimedes/dist
