@@ -13,6 +13,7 @@ futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+yrs = "0.21"
 
 [dev-dependencies]
 tokio-tungstenite = "0.24"

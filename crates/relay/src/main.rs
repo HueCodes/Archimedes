@@ -23,6 +23,8 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::broadcast;
+use yrs::updates::decoder::Decode;
+use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
 
 const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_ROOM: &str = "default";
@@ -31,7 +33,24 @@ const DEFAULT_ROOM: &str = "default";
 /// regardless, so this is acceptable.
 const ROOM_CAPACITY: usize = 256;
 
-type Rooms = Arc<Mutex<HashMap<String, broadcast::Sender<Vec<u8>>>>>;
+/// Per-room state. The doc is the authoritative copy; the sender fan-outs
+/// updates to every connected subscriber (including the originator —
+/// CP22's Envelope.client_id will let receivers skip-self).
+struct Room {
+    doc: Mutex<Doc>,
+    sender: broadcast::Sender<Vec<u8>>,
+}
+
+impl Room {
+    fn new() -> Self {
+        Self {
+            doc: Mutex::new(Doc::new()),
+            sender: broadcast::channel(ROOM_CAPACITY).0,
+        }
+    }
+}
+
+type Rooms = Arc<Mutex<HashMap<String, Arc<Room>>>>;
 
 #[derive(Debug, Deserialize)]
 struct WsParams {
@@ -83,13 +102,22 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, room, rooms))
 }
 
-async fn handle_socket(socket: WebSocket, room: String, rooms: Rooms) {
-    let sender = room_sender(&rooms, &room);
-    let mut receiver = sender.subscribe();
-    let n_subs = sender.receiver_count();
-    tracing::debug!(room = %room, subscribers = n_subs, "client connected");
+async fn handle_socket(socket: WebSocket, room_name: String, rooms: Rooms) {
+    let room = get_or_create_room(&rooms, &room_name);
+    let mut receiver = room.sender.subscribe();
+    let n_subs = room.sender.receiver_count();
+    tracing::debug!(room = %room_name, subscribers = n_subs, "client connected");
 
     let (mut sink, mut stream) = socket.split();
+
+    // Send the room snapshot first so the new client converges to current
+    // state without needing any prior sync handshake. An empty doc encodes
+    // to a tiny no-op update; the client applies it idempotently.
+    let snapshot = encode_room_state(&room.doc);
+    if sink.send(Message::Binary(snapshot)).await.is_err() {
+        tracing::debug!(room = %room_name, "client dropped before snapshot");
+        return;
+    }
 
     // Outbound: broadcast → this client.
     let mut send_task = tokio::spawn(async move {
@@ -100,20 +128,24 @@ async fn handle_socket(socket: WebSocket, room: String, rooms: Rooms) {
         }
     });
 
-    // Inbound: this client → broadcast (echoed back to sender too;
-    // CP22's Envelope.client_id will let receivers skip-self).
-    let bcast = sender.clone();
+    // Inbound: this client → apply to room doc → broadcast to subscribers.
+    let room_for_recv = room.clone();
+    let room_name_for_recv = room_name.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = stream.next().await {
-            match msg {
-                Message::Binary(bytes) => {
-                    let _ = bcast.send(bytes);
-                }
-                Message::Text(text) => {
-                    let _ = bcast.send(text.into_bytes());
-                }
+            let bytes = match msg {
+                Message::Binary(b) => b,
+                Message::Text(t) => t.into_bytes(),
                 Message::Close(_) => break,
-                _ => {}
+                _ => continue,
+            };
+            match apply_update_to_doc(&room_for_recv.doc, &bytes) {
+                Ok(()) => {
+                    let _ = room_for_recv.sender.send(bytes);
+                }
+                Err(e) => {
+                    tracing::warn!(room = %room_name_for_recv, "dropping malformed update: {e}");
+                }
             }
         }
     });
@@ -123,24 +155,38 @@ async fn handle_socket(socket: WebSocket, room: String, rooms: Rooms) {
         _ = (&mut recv_task) => send_task.abort(),
     }
 
-    // Drop the room when the last subscriber leaves so memory stays bounded
-    // for short-lived demo rooms. The Sender is still held by `bcast` until
-    // recv_task aborts, so we recheck after the join above completes.
+    // Drop the room when the last subscriber leaves. We held an Arc<Room>
+    // for the duration of the handler, so receiver_count drops to 0 only
+    // after our subscribe handle is dropped on task exit.
+    drop(room);
     let mut guard = rooms.lock().expect("rooms lock");
-    if let Some(s) = guard.get(&room) {
-        if s.receiver_count() == 0 {
-            guard.remove(&room);
-            tracing::debug!(room = %room, "room empty, removed");
+    if let Some(r) = guard.get(&room_name) {
+        if r.sender.receiver_count() == 0 {
+            guard.remove(&room_name);
+            tracing::debug!(room = %room_name, "room empty, removed");
         }
     }
 }
 
-fn room_sender(rooms: &Rooms, room: &str) -> broadcast::Sender<Vec<u8>> {
+fn get_or_create_room(rooms: &Rooms, name: &str) -> Arc<Room> {
     let mut guard = rooms.lock().expect("rooms lock");
     guard
-        .entry(room.to_string())
-        .or_insert_with(|| broadcast::channel(ROOM_CAPACITY).0)
+        .entry(name.to_string())
+        .or_insert_with(|| Arc::new(Room::new()))
         .clone()
+}
+
+fn encode_room_state(doc: &Mutex<Doc>) -> Vec<u8> {
+    let doc = doc.lock().expect("doc lock");
+    let txn = doc.transact();
+    txn.encode_state_as_update_v1(&StateVector::default())
+}
+
+fn apply_update_to_doc(doc: &Mutex<Doc>, bytes: &[u8]) -> Result<(), String> {
+    let update = Update::decode_v1(bytes).map_err(|e| format!("decode: {e}"))?;
+    let doc = doc.lock().map_err(|_| "doc lock poisoned".to_string())?;
+    let mut txn = doc.transact_mut();
+    txn.apply_update(update).map_err(|e| format!("apply: {e}"))
 }
 
 async fn shutdown_signal() {
@@ -154,6 +200,7 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
     use std::time::Duration;
     use tokio_tungstenite::tungstenite::Message as TMessage;
+    use yrs::Map;
 
     /// Spin up the server on an ephemeral port and return its address.
     async fn spawn_server() -> SocketAddr {
@@ -162,7 +209,6 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, build_app()).await.unwrap();
         });
-        // Give the server a beat to start accepting.
         tokio::time::sleep(Duration::from_millis(20)).await;
         addr
     }
@@ -178,29 +224,88 @@ mod tests {
         ws
     }
 
+    /// Drain the snapshot frame the server sends as soon as a client connects.
+    async fn drain_snapshot(
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Vec<u8> {
+        let next = tokio::time::timeout(Duration::from_secs(1), ws.next())
+            .await
+            .expect("snapshot timeout")
+            .expect("snapshot stream end")
+            .expect("snapshot frame error");
+        match next {
+            TMessage::Binary(b) => b,
+            other => panic!("expected binary snapshot, got {other:?}"),
+        }
+    }
+
+    /// Build an opaque update by inserting a single i64 into a fresh yrs doc.
+    fn make_update_with(key: &str, value: i64) -> Vec<u8> {
+        let doc = Doc::new();
+        let map = doc.get_or_insert_map("test");
+        {
+            let mut txn = doc.transact_mut();
+            map.insert(&mut txn, key.to_string(), value);
+        }
+        let txn = doc.transact();
+        txn.encode_state_as_update_v1(&StateVector::default())
+    }
+
+    fn doc_from_update(bytes: &[u8]) -> Doc {
+        let doc = Doc::new();
+        let update = Update::decode_v1(bytes).expect("decode");
+        {
+            let mut txn = doc.transact_mut();
+            txn.apply_update(update).expect("apply");
+        }
+        doc
+    }
+
+    fn read_test_value(doc: &Doc, key: &str) -> Option<i64> {
+        let map = doc.get_or_insert_map("test");
+        let txn = doc.transact();
+        let value = map.get(&txn, key)?;
+        match value {
+            yrs::Out::Any(yrs::Any::BigInt(n)) => Some(n),
+            yrs::Out::Any(yrs::Any::Number(n)) => Some(n as i64),
+            other => panic!("unexpected value shape: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn make_update_round_trips_locally() {
+        // Sanity: our test-helper construction can be decoded back to the
+        // same value. If this fails the network tests are red-herrings.
+        let bytes = make_update_with("k", 42);
+        let doc = doc_from_update(&bytes);
+        assert_eq!(read_test_value(&doc, "k"), Some(42));
+    }
+
     #[tokio::test]
     async fn broadcast_within_room() {
         let addr = spawn_server().await;
         let mut a = connect(addr, "alpha").await;
         let mut b = connect(addr, "alpha").await;
+        let _ = drain_snapshot(&mut a).await;
+        let _ = drain_snapshot(&mut b).await;
 
-        a.send(TMessage::Binary(b"hello".to_vec())).await.unwrap();
+        let update = make_update_with("k", 42);
+        a.send(TMessage::Binary(update.clone())).await.unwrap();
 
-        // Drain frames on B until we see one matching the payload.
-        // Echo to A is fine and irrelevant to this assertion.
         let received = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if let Some(Ok(TMessage::Binary(bytes))) = b.next().await {
-                    if bytes == b"hello" {
-                        return bytes;
-                    }
+                    return bytes;
                 }
             }
         })
         .await
         .expect("timeout waiting for broadcast");
 
-        assert_eq!(received, b"hello");
+        let doc = doc_from_update(&received);
+        assert_eq!(read_test_value(&doc, "k"), Some(42));
     }
 
     #[tokio::test]
@@ -208,11 +313,53 @@ mod tests {
         let addr = spawn_server().await;
         let mut a = connect(addr, "alpha").await;
         let mut b = connect(addr, "beta").await;
+        let _ = drain_snapshot(&mut a).await;
+        let _ = drain_snapshot(&mut b).await;
 
-        a.send(TMessage::Binary(b"alpha-only".to_vec())).await.unwrap();
+        let update = make_update_with("k", 1);
+        a.send(TMessage::Binary(update)).await.unwrap();
 
-        // B is in beta — it must NOT receive the alpha message.
         let result = tokio::time::timeout(Duration::from_millis(200), b.next()).await;
         assert!(result.is_err(), "beta client received cross-room message");
+    }
+
+    #[tokio::test]
+    async fn late_joiner_receives_prior_state_in_snapshot() {
+        let addr = spawn_server().await;
+        let mut a = connect(addr, "history").await;
+        let _ = drain_snapshot(&mut a).await;
+
+        // A makes a change while alone in the room.
+        a.send(TMessage::Binary(make_update_with("first", 7)))
+            .await
+            .unwrap();
+        // Give the server a moment to apply.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // B joins late; first frame should already include A's change.
+        let mut b = connect(addr, "history").await;
+        let snapshot = drain_snapshot(&mut b).await;
+        let doc = doc_from_update(&snapshot);
+        assert_eq!(
+            read_test_value(&doc, "first"),
+            Some(7),
+            "late joiner did not see prior state"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_update_is_dropped_not_broadcast() {
+        let addr = spawn_server().await;
+        let mut a = connect(addr, "noise").await;
+        let mut b = connect(addr, "noise").await;
+        let _ = drain_snapshot(&mut a).await;
+        let _ = drain_snapshot(&mut b).await;
+
+        a.send(TMessage::Binary(b"\xff\xff garbage".to_vec()))
+            .await
+            .unwrap();
+
+        let result = tokio::time::timeout(Duration::from_millis(200), b.next()).await;
+        assert!(result.is_err(), "garbage was relayed instead of dropped");
     }
 }
