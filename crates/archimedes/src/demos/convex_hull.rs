@@ -395,6 +395,7 @@ impl ConvexHullDemo {
             self.orient_tests = 0;
             self.last_ms = 0.0;
             self.anim = None;
+            paint_remote_cursors(&frame.painter, frame.rect, &self.presence);
             return;
         }
 
@@ -448,6 +449,7 @@ impl ConvexHullDemo {
             self.hull_len = anim.plan.hull.len();
             self.orient_tests = anim.plan.orient_tests;
             self.last_ms = 0.0;
+            paint_remote_cursors(&frame.painter, frame.rect, &self.presence);
             return;
         }
 
@@ -467,6 +469,7 @@ impl ConvexHullDemo {
         });
         self.editor
             .paint_with_focus(&frame.painter, theme::FG, focus);
+        paint_remote_cursors(&frame.painter, frame.rect, &self.presence);
     }
 
     fn ui_dual(&self, ui: &mut egui::Ui, focus_idx: Option<usize>) {
@@ -672,6 +675,34 @@ fn reconcile_ops(prev: &[Pos2], curr: &[Pos2]) -> Vec<ReconcileOp> {
         return vec![ReconcileOp::Remove(prev.len() - 1)];
     }
     vec![ReconcileOp::BulkReplace]
+}
+
+fn paint_remote_cursors(painter: &egui::Painter, rect: Rect, presence: &PresenceTracker) {
+    use eframe::egui::{Align2, Color32, FontId, Stroke};
+    for (id, cursor) in presence.remotes() {
+        let pos = Pos2::new(
+            rect.min.x + cursor.pos_norm.x * rect.width(),
+            rect.min.y + cursor.pos_norm.y * rect.height(),
+        );
+        let color = Color32::from_rgb(
+            ((cursor.color >> 16) & 0xff) as u8,
+            ((cursor.color >> 8) & 0xff) as u8,
+            (cursor.color & 0xff) as u8,
+        );
+        // Soft outer glow + ring + center dot — easy to spot against
+        // the dark theme without dominating the canvas.
+        painter.circle_filled(pos, 9.0, color.linear_multiply(0.18));
+        painter.circle_stroke(pos, 6.5, Stroke::new(1.5, color));
+        painter.circle_filled(pos, 2.5, color);
+        let label: String = id.chars().take(6).collect();
+        painter.text(
+            pos + egui::vec2(10.0, -2.0),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::monospace(9.5),
+            color,
+        );
+    }
 }
 
 fn paint_partial_polyline(painter: &egui::Painter, pts: &[Pos2]) {
