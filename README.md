@@ -23,19 +23,32 @@ Screenshots: [Delaunay / Voronoi](docs/screenshots/delaunay-voronoi.png) · [Pol
 
 ## Real-time collaboration
 
-The Convex Hull tab is a CRDT-backed shared document. Two browser tabs pointed at the
-same room see each other's edits sub-100ms — drag a point in tab A, the hull updates
-in tab B. The convergence is conflict-free (yrs / Yjs port), the wire format is
-versioned Protobuf, and a tab joining mid-session converges from a server snapshot
-without a sync handshake.
+The Convex Hull tab is a CRDT-backed shared document. Two browser tabs pointed at
+the same room see each other's edits sub-100ms — drag a point in tab A, the hull
+updates in tab B, presence cursors show where the other person is pointing. The
+convergence is conflict-free (yrs / Yjs port) and the wire format is versioned
+Protobuf.
+
+The default transport is browser-native **`BroadcastChannel`** — same-origin tabs
+of the deployed site discover each other automatically with no server, no
+infrastructure, no setup. Just open two tabs of
+[huecodes.github.io/Archimedes/](https://huecodes.github.io/Archimedes/) and start
+dragging.
+
+For cross-device sync (two laptops, two phones), opt into the WebSocket relay:
 
 ```sh
-# Run the relay server locally:
+# Terminal 1: relay server
 cargo run -p relay
-# In two browser tabs:
-trunk serve  # in crates/archimedes
+
+# Terminal 2: dev server (from crates/archimedes/)
+trunk serve
+# Open in two browsers:
 # → http://127.0.0.1:8080/?ws=ws://127.0.0.1:8787/ws&room=demo
 ```
+
+A tab joining mid-session converges from a server snapshot without any sync
+handshake.
 
 ### Wire format
 
@@ -67,9 +80,14 @@ message Envelope    { oneof payload { ClientHello hello = 1; DocUpdate update = 
   client tolerates the echo because yrs `apply_update` is idempotent for
   already-applied operations. A future `Envelope.client_id` field would
   let receivers skip self-traffic to save bandwidth.
+- BroadcastChannel only sees same-origin same-browser tabs — the
+  cross-device demo requires the relay.
 - The y-sync protocol (sync step 1 / step 2) is skipped — joining clients
   receive the full state snapshot in their first frame instead.
 - Rooms are in-memory only; a relay restart loses room state.
+- Cursor and point coords are sent in canvas pixel space (cursor
+  normalized, points raw); two clients with very different canvas sizes
+  will see misalignment until normalization is extended to points.
 
 ## Why "Archimedes"
 
@@ -87,6 +105,7 @@ the same orientation-test machinery that drives the convex-hull tab in the limit
 - [`axum`](https://crates.io/crates/axum) + [`tokio-tungstenite`](https://crates.io/crates/tokio-tungstenite) — relay server
 - [`prost`](https://crates.io/crates/prost) + [`protox`](https://crates.io/crates/protox) — Protobuf wire format, pure-Rust schema compile (no `protoc` needed)
 - [`gloo-net`](https://crates.io/crates/gloo-net) — WebSocket client in WASM
+- `web_sys::BroadcastChannel` — browser-native cross-tab transport, no server
 - [`web-time`](https://crates.io/crates/web-time) — monotonic clocks that compile on both native and `wasm32`
 
 ## Build
