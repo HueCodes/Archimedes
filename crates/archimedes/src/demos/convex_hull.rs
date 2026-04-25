@@ -4,25 +4,35 @@ use eframe::egui::{self, Align2, FontId, Pos2, Rect, Stroke};
 use web_time::Instant;
 
 use crate::canvas;
-use crate::collab::{CollabDoc, PointId};
+use crate::collab::{CollabDoc, PointId, WsClient, WsStatus};
 use crate::geometry::primitives::orient2d_naive;
 use crate::theme;
 use crate::ui::point_editor::{next_seed, seeded_points, PointEditor, HIT_RADIUS};
 
 const INITIAL_SEED: u64 = 0x8F3A_2C71;
 const DEFAULT_INTERVAL_MS: u64 = 120;
+/// Send no faster than this so a continuous drag (which fires at frame rate,
+/// typically 60Hz) doesn't flood the wire.
+const SEND_THROTTLE_MS: u128 = 33;
 
 pub struct ConvexHullDemo {
     editor: PointEditor,
     /// CRDT-backed authoritative point set. Local mutations through
-    /// `editor` are mirrored here each frame; remote updates (CP19+)
-    /// flow back into `editor` via `sync_editor_from_doc`.
+    /// `editor` are mirrored here each frame; remote updates flow back
+    /// into `editor` via `sync_editor_from_doc`.
     doc: CollabDoc,
     /// Stable point ids, parallel to `editor.points()`.
     ids: Vec<PointId>,
     /// Snapshot of `editor.points()` at the start of the previous frame —
     /// reconciled against the post-`run` state to detect adds / drags / deletes.
     last_snapshot: Vec<Pos2>,
+    /// WebSocket transport. Disabled on native and when no `?ws=` query
+    /// param is present; otherwise pumps doc updates to/from a relay.
+    ws: WsClient,
+    /// State vector of the doc as of the last outgoing send. Anything
+    /// the doc has beyond this is "unsent local ops we owe the server".
+    last_sent_sv: Vec<u8>,
+    last_send_at: Instant,
     seed: u64,
     orient_tests: usize,
     hull_len: usize,
@@ -37,11 +47,22 @@ pub struct ConvexHullDemo {
 
 impl Default for ConvexHullDemo {
     fn default() -> Self {
+        Self::with_ws(WsClient::disabled())
+    }
+}
+
+impl ConvexHullDemo {
+    pub fn with_ws(ws: WsClient) -> Self {
+        let doc = CollabDoc::new();
+        let last_sent_sv = doc.state_vector();
         Self {
             editor: PointEditor::default(),
-            doc: CollabDoc::new(),
+            doc,
             ids: Vec::new(),
             last_snapshot: Vec::new(),
+            ws,
+            last_sent_sv,
+            last_send_at: Instant::now(),
             seed: INITIAL_SEED,
             orient_tests: 0,
             hull_len: 0,
@@ -50,6 +71,48 @@ impl Default for ConvexHullDemo {
             anim: None,
             show_duality: false,
             last_hull: Vec::new(),
+        }
+    }
+
+    pub fn collab_status(&self) -> WsStatus {
+        self.ws.status()
+    }
+
+    /// Drain inbound bytes into the doc, then send the local diff to the
+    /// server (with throttle). Order is: send-first, apply-remote-second,
+    /// so a frame that has both unsent local ops AND incoming remote ops
+    /// neither echoes the remote nor loses the local.
+    fn collab_tick(&mut self) {
+        let now = Instant::now();
+
+        // Send unsent local ops, throttled.
+        let elapsed = now.duration_since(self.last_send_at).as_millis();
+        if elapsed >= SEND_THROTTLE_MS {
+            let current_sv = self.doc.state_vector();
+            if current_sv != self.last_sent_sv {
+                if let Ok(diff) = self.doc.encode_diff(&self.last_sent_sv) {
+                    self.ws.send(diff);
+                    self.last_sent_sv = current_sv;
+                    self.last_send_at = now;
+                }
+            }
+        }
+
+        // Apply incoming.
+        let mut applied_any = false;
+        for bytes in self.ws.drain_inbound() {
+            match self.doc.apply_remote_update(&bytes) {
+                Ok(()) => applied_any = true,
+                Err(e) => log::warn!("apply remote update: {e}"),
+            }
+        }
+        if applied_any {
+            // Server already has these ops; treat them as sent so we
+            // don't echo them back next tick.
+            self.last_sent_sv = self.doc.state_vector();
+            self.sync_editor_from_doc();
+            // The bulk replace invalidates any in-flight animation.
+            self.anim = None;
         }
     }
 }
@@ -277,6 +340,8 @@ impl ConvexHullDemo {
         // Reconcile BEFORE the empty-state early return: a right-click that
         // removes the last point would otherwise leave the doc stale.
         self.reconcile_editor_to_doc();
+        // Send local + apply remote each frame so collab tracks input.
+        self.collab_tick();
         self.last_rect = Some(frame.rect);
 
         canvas::paint_grid(&frame.painter, frame.rect);

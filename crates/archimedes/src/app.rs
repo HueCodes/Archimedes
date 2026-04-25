@@ -1,5 +1,6 @@
 use eframe::egui::{self, Align, Layout, RichText, Vec2};
 
+use crate::collab::{ws_url_from_query, WsClient, WsStatus};
 use crate::demos::convex_hull::ConvexHullDemo;
 use crate::demos::critical_area::CriticalAreaDemo;
 use crate::demos::delaunay_voronoi::{DelaunayVoronoiDemo, STEP_INTERVAL_MS as DV_STEP_MS};
@@ -51,9 +52,13 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx);
+        let ws = match ws_url_from_query() {
+            Some(url) => WsClient::connect(url),
+            None => WsClient::disabled(),
+        };
         Self {
             tab: Tab::ConvexHull,
-            convex_hull: ConvexHullDemo::default(),
+            convex_hull: ConvexHullDemo::with_ws(ws),
             voronoi: DelaunayVoronoiDemo::default(),
             polygon_ops: PolygonOpsDemo::default(),
             critical_area: CriticalAreaDemo::default(),
@@ -167,6 +172,15 @@ impl eframe::App for App {
                     egui::Stroke::new(1.0, theme::FG_DIM.linear_multiply(0.25)),
                 );
             });
+    }
+}
+
+fn collab_status_chip(status: WsStatus) -> (&'static str, egui::Color32) {
+    match status {
+        WsStatus::Disabled => ("collab: off", theme::FG_DIM),
+        WsStatus::Connecting => ("collab: connecting", theme::ORANGE),
+        WsStatus::Connected => ("collab: live", theme::OK),
+        WsStatus::Reconnecting => ("collab: reconnecting", theme::WARN),
     }
 }
 
@@ -300,6 +314,16 @@ fn bottom_bar(
                             .size(11.0)
                             .color(color),
                     );
+                    if tab == Tab::ConvexHull {
+                        let (label, color) = collab_status_chip(hull.collab_status());
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(label)
+                                .monospace()
+                                .size(11.0)
+                                .color(color),
+                        );
+                    }
                 });
                 },
             );
