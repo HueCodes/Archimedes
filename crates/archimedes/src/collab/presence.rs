@@ -19,7 +19,6 @@ use web_time::Instant;
 use crate::collab::wire::{
     encode_envelope, envelope::Payload, Envelope, Presence,
 };
-use crate::collab::WsClient;
 
 const SEND_THROTTLE_MS: u128 = 33;
 /// Drop remote cursors that haven't pinged us in this long.
@@ -64,9 +63,14 @@ impl PresenceTracker {
     }
 
     /// Send a `Presence` if at least `SEND_THROTTLE_MS` has passed since
-    /// the last send and the local cursor is over the canvas. No-op if
-    /// the ws is disabled.
-    pub fn maybe_send(&mut self, local_pos_norm: Option<Pos2>, ws: &WsClient) {
+    /// the last send and the local cursor is over the canvas. The `send`
+    /// closure is responsible for delivering bytes to whichever transport
+    /// the caller is using; this module is transport-agnostic.
+    pub fn maybe_send<F: FnOnce(Vec<u8>)>(
+        &mut self,
+        local_pos_norm: Option<Pos2>,
+        send: F,
+    ) {
         let pos = match local_pos_norm {
             Some(p) => p,
             None => return,
@@ -84,7 +88,7 @@ impl PresenceTracker {
                 ts_ms: now_unix_ms(),
             })),
         };
-        ws.send(encode_envelope(&env));
+        send(encode_envelope(&env));
         self.last_send_at = now;
     }
 

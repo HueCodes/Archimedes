@@ -8,7 +8,7 @@ use crate::collab::presence::PresenceTracker;
 use crate::collab::wire::{
     decode_envelope, encode_envelope, envelope::Payload, DocUpdate, Envelope,
 };
-use crate::collab::{CollabDoc, PointId, WsClient, WsStatus};
+use crate::collab::{CollabDoc, PointId, Transport, WsStatus};
 use crate::geometry::primitives::orient2d_naive;
 use crate::theme;
 use crate::ui::point_editor::{next_seed, seeded_points, PointEditor, HIT_RADIUS};
@@ -30,9 +30,9 @@ pub struct ConvexHullDemo {
     /// Snapshot of `editor.points()` at the start of the previous frame —
     /// reconciled against the post-`run` state to detect adds / drags / deletes.
     last_snapshot: Vec<Pos2>,
-    /// WebSocket transport. Disabled on native and when no `?ws=` query
-    /// param is present; otherwise pumps doc updates to/from a relay.
-    ws: WsClient,
+    /// Transport — BroadcastChannel by default, WebSocket if `?ws=` is
+    /// set, Disabled on native.
+    transport: Transport,
     /// State vector of the doc as of the last outgoing send. Anything
     /// the doc has beyond this is "unsent local ops we owe the server".
     last_sent_sv: Vec<u8>,
@@ -52,12 +52,12 @@ pub struct ConvexHullDemo {
 
 impl Default for ConvexHullDemo {
     fn default() -> Self {
-        Self::with_ws(WsClient::disabled())
+        Self::with_transport(Transport::Disabled)
     }
 }
 
 impl ConvexHullDemo {
-    pub fn with_ws(ws: WsClient) -> Self {
+    pub fn with_transport(transport: Transport) -> Self {
         let doc = CollabDoc::new();
         let last_sent_sv = doc.state_vector();
         Self {
@@ -65,7 +65,7 @@ impl ConvexHullDemo {
             doc,
             ids: Vec::new(),
             last_snapshot: Vec::new(),
-            ws,
+            transport,
             last_sent_sv,
             last_send_at: Instant::now(),
             presence: PresenceTracker::new(),
@@ -81,7 +81,11 @@ impl ConvexHullDemo {
     }
 
     pub fn collab_status(&self) -> WsStatus {
-        self.ws.status()
+        self.transport.status()
+    }
+
+    pub fn collab_kind(&self) -> crate::collab::TransportKind {
+        self.transport.kind()
     }
 
     /// Drain inbound bytes into the doc, then send the local diff to the
@@ -102,7 +106,7 @@ impl ConvexHullDemo {
                             yrs_update: yrs_diff,
                         })),
                     };
-                    self.ws.send(encode_envelope(&env));
+                    self.transport.send(encode_envelope(&env));
                     self.last_sent_sv = current_sv;
                     self.last_send_at = now;
                 }
@@ -111,7 +115,7 @@ impl ConvexHullDemo {
 
         // Apply incoming.
         let mut applied_any = false;
-        for bytes in self.ws.drain_inbound() {
+        for bytes in self.transport.drain_inbound() {
             let env = match decode_envelope(&bytes) {
                 Ok(e) => e,
                 Err(e) => {
@@ -378,7 +382,9 @@ impl ConvexHullDemo {
                 None
             }
         });
-        self.presence.maybe_send(local_norm, &self.ws);
+        let tx = &self.transport;
+        self.presence
+            .maybe_send(local_norm, |bytes| tx.send(bytes));
         self.presence.prune();
         self.last_rect = Some(frame.rect);
 
