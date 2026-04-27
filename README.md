@@ -11,28 +11,6 @@ via WebGPU through [`egui`](https://github.com/emilk/egui).
 
 [![Convex hull tab](docs/screenshots/hull.png)](https://huecodes.github.io/Archimedes/)
 
-## What's in it
-
-<!--
-  Screenshots referenced below live in docs/screenshots/ and must exist with
-  these exact filenames before publishing the README:
-    - hull.png
-    - delaunay-voronoi.png
-    - polygon-ops.png
-    - critical-area.png
-    - robustness.png
--->
-
-| Tab | One-liner |
-|---|---|
-| **Convex Hull** | Andrew's monotone chain, animated step-through, live orientation-test counter; toggleable point-line duality view (upper hull ↔ upper envelope of dual lines) with bidirectional cross-highlight |
-| **Delaunay + Voronoi** | Incremental Bowyer-Watson via `spade`; hover a site for its degree, cell area, and nearest neighbor; Euler `V − E + F = 2` readout; toggleable empty-circumcircle overlay; **step-through replay** with `← / →` and `Space` (bad triangles light up in WARN before the new vertex is wired in); **power-diagram (weighted Voronoi)** mode — scroll over a site to grow / shrink its weight, watch its cell engulf or vanish |
-| **Polygon Ops** | Union / intersection / difference / xor / symmetric difference on two draggable polygons via `i_overlay`; click on any edge inserts a vertex at the projected point, right-click deletes; live Euler V/E/F + component count on the result |
-| **Critical Area** | Two "wires" and a defect-radius slider; shades the region where a disk of radius `r` shorts them — the canonical semiconductor yield-analysis primitive |
-| **Robustness** | Naive `f32` vs. Shewchuk adaptive `orient2d` on a near-degenerate point set; renders the untrustworthy band where the static error bound straddles zero, with a `\|naive\|/bound` ratio readout tier-colored by safety margin |
-
-Screenshots: [Delaunay / Voronoi](docs/screenshots/delaunay-voronoi.png) · [Polygon Ops](docs/screenshots/polygon-ops.png) · [Critical Area](docs/screenshots/critical-area.png) · [Robustness](docs/screenshots/robustness.png)
-
 ## Real-time collaboration
 
 The Convex Hull tab is a CRDT-backed shared document. Two browser tabs pointed at
@@ -100,6 +78,28 @@ message Envelope    { oneof payload { ClientHello hello = 1; DocUpdate update = 
 - Cursor and point coords are sent in canvas pixel space (cursor
   normalized, points raw); two clients with very different canvas sizes
   will see misalignment until normalization is extended to points.
+
+## What's in it
+
+<!--
+  Screenshots referenced below live in docs/screenshots/ and must exist with
+  these exact filenames before publishing the README:
+    - hull.png
+    - delaunay-voronoi.png
+    - polygon-ops.png
+    - critical-area.png
+    - robustness.png
+-->
+
+| Tab | One-liner |
+|---|---|
+| **Convex Hull** | Andrew's monotone chain, animated step-through, live orientation-test counter; toggleable point-line duality view (upper hull ↔ upper envelope of dual lines) with bidirectional cross-highlight |
+| **Delaunay + Voronoi** | Incremental Bowyer-Watson via `spade`; hover a site for its degree, cell area, and nearest neighbor; Euler `V − E + F = 2` readout; toggleable empty-circumcircle overlay; **step-through replay** with `← / →` and `Space` (bad triangles light up in WARN before the new vertex is wired in); **power-diagram (weighted Voronoi)** mode — scroll over a site to grow / shrink its weight, watch its cell engulf or vanish |
+| **Polygon Ops** | Union / intersection / difference / xor / symmetric difference on two draggable polygons via `i_overlay`; click on any edge inserts a vertex at the projected point, right-click deletes; live Euler V/E/F + component count on the result |
+| **Critical Area** | Two "wires" and a defect-radius slider; shades the region where a disk of radius `r` shorts them — the canonical semiconductor yield-analysis primitive |
+| **Robustness** | Naive `f32` vs. Shewchuk adaptive `orient2d` on a near-degenerate point set; renders the untrustworthy band where the static error bound straddles zero, with a `\|naive\|/bound` ratio readout tier-colored by safety margin |
+
+Screenshots: [Delaunay / Voronoi](docs/screenshots/delaunay-voronoi.png) · [Polygon Ops](docs/screenshots/polygon-ops.png) · [Critical Area](docs/screenshots/critical-area.png) · [Robustness](docs/screenshots/robustness.png)
 
 ## Why "Archimedes"
 
