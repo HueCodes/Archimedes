@@ -120,6 +120,52 @@ the same orientation-test machinery that drives the convex-hull tab in the limit
 - `web_sys::BroadcastChannel` — browser-native cross-tab transport, no server
 - [`web-time`](https://crates.io/crates/web-time) — monotonic clocks that compile on both native and `wasm32`
 
+## Architecture
+
+**egui + wgpu.** The UI is immediate-mode (`egui`), backed by a portable GPU
+renderer (`wgpu`). The same source compiles to a native desktop binary and to a
+browser bundle that targets WebGPU (with a WebGL fallback for older browsers).
+There is no "web port" — the canvas, input handling, and draw loop are
+identical across targets.
+
+**WASM build path.** `trunk build --release` invokes the Rust toolchain with
+`--target wasm32-unknown-unknown`, runs `wasm-bindgen` to generate the JS
+glue, and emits a static `dist/` directory. A post-build `wasm-opt -Os` pass
+shrinks the binary further before deploy. The whole pipeline is declared in
+`Trunk.toml` and runs hands-off in CI.
+
+**Why yrs over automerge.** Both are conflict-free replicated data types. `yrs`
+(the Rust port of Yjs) compiles to a smaller WASM payload and exposes a
+simpler API for the document shape Archimedes needs: a flat ordered list of
+2D points. Automerge's richer history model would be wasted here, and the
+extra bytes matter when the entire app already pays a WebGPU + egui +
+geometry-library tax in the bundle.
+
+**Protobuf via prost + protox.** The wire format is `.proto`-defined and
+compiled at build time. `protox` is a pure-Rust `.proto` parser, so the build
+needs no `protoc` binary on PATH — important for CI and for first-time
+contributors. Schema evolution is the whole point of using Protobuf here: the
+top-level `Envelope` is a `oneof`, so adding a new payload variant is
+non-breaking by construction:
+
+```proto
+message Envelope {
+  oneof payload {
+    ClientHello hello = 1;
+    DocUpdate   update = 2;
+    Presence    presence = 3;
+    // EditCursor cursor = 4;   // future addition; old peers ignore it
+  }
+}
+```
+
+**Transport split.** Default transport is the browser's
+`BroadcastChannel` API: same-origin tabs of the deployed site discover each
+other with no server, no infrastructure, and no per-deploy cost — that is what
+makes the two-tab demo on GitHub Pages possible. The WebSocket relay
+(`crates/relay`) is opt-in via `?ws=…` for cross-device dev, where
+`BroadcastChannel` (which is same-browser only) cannot reach.
+
 ## Build
 
 ```sh
