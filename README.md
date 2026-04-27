@@ -5,6 +5,8 @@ Voronoi, polygon boolean operations, semiconductor critical-area, and a naive-vs
 robust predicate showdown — written in Rust, compiled to WebAssembly, rendered
 via WebGPU through [`egui`](https://github.com/emilk/egui).
 
+![Archimedes hero](docs/hero.gif)
+
 **Live demo**: https://huecodes.github.io/Archimedes/
 
 [![Convex hull tab](docs/screenshots/hull.png)](https://huecodes.github.io/Archimedes/)
