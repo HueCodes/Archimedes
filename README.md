@@ -134,6 +134,9 @@ glue, and emits a static `dist/` directory. A post-build `wasm-opt -Os` pass
 shrinks the binary further before deploy. The whole pipeline is declared in
 `Trunk.toml` and runs hands-off in CI.
 
+Release WASM bundle: 4.59 MB before `wasm-opt -Os` (post-`wasm-opt` size
+pending — `wasm-opt` not yet installed in the build environment).
+
 **Why yrs over automerge.** Both are conflict-free replicated data types. `yrs`
 (the Rust port of Yjs) compiles to a smaller WASM payload and exposes a
 simpler API for the document shape Archimedes needs: a flat ordered list of
