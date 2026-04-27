@@ -11,6 +11,16 @@ via WebGPU through [`egui`](https://github.com/emilk/egui).
 
 ## What's in it
 
+<!--
+  Screenshots referenced below live in docs/screenshots/ and must exist with
+  these exact filenames before publishing the README:
+    - hull.png
+    - delaunay-voronoi.png
+    - polygon-ops.png
+    - critical-area.png
+    - robustness.png
+-->
+
 | Tab | One-liner |
 |---|---|
 | **Convex Hull** | Andrew's monotone chain, animated step-through, live orientation-test counter; toggleable point-line duality view (upper hull ↔ upper envelope of dual lines) with bidirectional cross-highlight |
