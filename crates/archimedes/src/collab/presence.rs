@@ -49,7 +49,9 @@ impl PresenceTracker {
         Self {
             client_id,
             color,
-            last_send_at: Instant::now() - std::time::Duration::from_secs(1),
+            last_send_at: Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
             remotes: HashMap::new(),
         }
     }
