@@ -187,9 +187,12 @@ dependencies = [
  "egui",
  "env_logger",
  "futures",
+ "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "gloo-net",
  "gloo-timers",
  "i_overlay",
+ "js-sys",
  "log",
  "prost",
  "prost-build",
@@ -198,6 +201,7 @@ dependencies = [
  "serde",
  "spade",
  "uuid",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
@@ -1202,10 +1206,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
